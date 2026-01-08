@@ -10,34 +10,77 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
+import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.ExitToApp
+import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PersonSearch
+import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
-import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -47,8 +90,40 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import retrofit2.Retrofit
+import retrofit2.converter.gson.GsonConverterFactory
+import retrofit2.http.Body
+import retrofit2.http.POST
 
-// --- MODELOS DE DATOS ---
+// --- 1. CAPA DE RED (NETWORKING) ---
+// Define cómo son los datos que envías y recibes del servidor
+data class AuthRequest(val username: String, val password: String)
+data class AuthResponse(val success: Boolean, val token: String?, val message: String?)
+
+// Interfaz para comunicarse con TU servidor
+interface ApiService {
+    // Estas rutas deben existir en tu servidor backend
+    @POST("/api/login")
+    suspend fun login(@Body request: AuthRequest): AuthResponse
+
+    @POST("/api/register")
+    suspend fun register(@Body request: AuthRequest): AuthResponse
+}
+
+// Objeto Singleton para crear la conexión
+object RetrofitInstance {
+    private const val BASE_URL = "http://192.168.0.171:3000/"
+
+    val api: ApiService by lazy {
+        Retrofit.Builder()
+            .baseUrl(BASE_URL)
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+            .create(ApiService::class.java)
+    }
+}
+
+// --- 2. MODELOS DE DATOS DE LA APP ---
 data class MusicItem(
     val id: Int,
     val title: String,
@@ -58,21 +133,26 @@ data class MusicItem(
     var isFavorite: Boolean = false
 )
 
-data class Comment(val author: String, val text: String)
-
 data class UserPost(val id: Int, val userName: String, val imageUrl: String, val comment: String)
 data class FriendCollection(val id: Int, val songTitle: String, val friendNames: List<String>)
 
-// --- VIEWMODEL ---
-class MainViewModel : ViewModel() {
+// --- 3. VIEWMODEL ---
+class MainViewModel : androidx.lifecycle.ViewModel() {
+
+    // Estado de carga inicial
     private val _isLoading = MutableStateFlow(true)
     val isLoading = _isLoading.asStateFlow()
 
-    // Estado para las barras de búsqueda
+    // --- ESTADO DE AUTENTICACIÓN ---
+    var isLoggedIn = mutableStateOf(false) // ¿El usuario entró?
+    var authError = mutableStateOf<String?>(null) // Errores de login
+    var isRegistering = mutableStateOf(false) // ¿Está en pantalla de registro?
+
+    // Estado para las barras de búsqueda (App Principal)
     var userSearchQuery = mutableStateOf("")
     var mapSearchQuery = mutableStateOf("")
 
-    // Datos simulados
+    // Datos simulados (Se cargarían tras el login)
     val items = mutableStateListOf(
         MusicItem(1, "Neon Nights", "CyberPunks", "Synthwave", "Electronic"),
         MusicItem(2, "Jazz Café", "Blue Note", "Jazz", "Jazz"),
@@ -82,14 +162,6 @@ class MainViewModel : ViewModel() {
         MusicItem(6, "Night Drive", "Kavinsky", "Synth", "Electronic")
     )
 
-    // Simulacion de posts de otros usuarios para una canción
-    val socialPosts = listOf(
-        UserPost(1, "Ana_99", "", "Vibing en la playa 🌴"),
-        UserPost(2, "CarlosDev", "", "Coding session intense 💻"),
-        UserPost(3, "LuisaArt", "", "Inspiración nocturna 🌙")
-    )
-
-    // Colecciones de amigos en el perfil
     val friendCollections = mutableStateListOf(
         FriendCollection(1, "Neon Nights", listOf("Ana", "Pedro", "Tú")),
         FriendCollection(2, "Despacito", listOf("Luis", "Tú"))
@@ -99,15 +171,65 @@ class MainViewModel : ViewModel() {
         viewModelScope.launch {
             delay(1000)
             _isLoading.value = false
+            // Aquí podrías comprobar si ya existe un token guardado en DataStore
+            // para poner isLoggedIn.value = true automáticamente.
         }
     }
 
-    // CORREGIDO: Añadida función necesaria para cambiar favoritos
-    fun toggleFavorite(item: MusicItem) {
-        val index = items.indexOfFirst { it.id == item.id }
-        if (index != -1) {
-            items[index] = items[index].copy(isFavorite = !items[index].isFavorite)
+    // --- LÓGICA DE LOGIN / REGISTRO ---
+    fun performLogin(user: String, pass: String) {
+        viewModelScope.launch {
+            _isLoading.value = true
+            authError.value = null
+            try {
+                // LLAMADA REAL AL SERVIDOR:
+                // val response = RetrofitInstance.api.login(AuthRequest(user, pass))
+
+                // SIMULACIÓN (Para que te funcione mientras configuras el servidor):
+                delay(1500) // Simular red
+                val response = AuthResponse(success = true, token = "fake_token_123", message = "OK")
+
+                if (response.success) {
+                    isLoggedIn.value = true
+                } else {
+                    authError.value = response.message ?: "Error al iniciar sesión"
+                }
+            } catch (e: Exception) {
+                authError.value = "Error de conexión: ${e.localizedMessage}"
+            } finally {
+                _isLoading.value = false
+            }
         }
+    }
+
+    fun performRegister(user: String, pass: String) {
+        viewModelScope.launch {
+            _isLoading.value = true
+            authError.value = null
+            try {
+                // LLAMADA REAL AL SERVIDOR:
+                // val response = RetrofitInstance.api.register(AuthRequest(user, pass))
+
+                // SIMULACIÓN:
+                delay(1500)
+                val response = AuthResponse(success = true, token = "fake_token_new", message = "Cuenta creada")
+
+                if (response.success) {
+                    isLoggedIn.value = true // Entra directo tras registro
+                } else {
+                    authError.value = response.message ?: "Error al registrar"
+                }
+            } catch (e: Exception) {
+                authError.value = "Error de conexión: ${e.localizedMessage}"
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    fun logout() {
+        isLoggedIn.value = false
+        // Aquí borrarías el token guardado
     }
 
     fun addFriendCollection() {
@@ -115,7 +237,7 @@ class MainViewModel : ViewModel() {
     }
 }
 
-// --- ACTIVIDAD PRINCIPAL ---
+// --- 4. ACTIVIDAD PRINCIPAL ---
 class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels()
 
@@ -127,19 +249,112 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         setContent {
-            // Usamos MaterialTheme por defecto si NewsickTheme no está definido externamente
             MaterialTheme(
                 colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()
             ) {
-                // Cálculo del tamaño de ventana para diseño adaptativo
                 val windowSize = calculateWindowSizeClass(this)
-                NewsickApp(windowSize.widthSizeClass, viewModel)
+
+                // DECISIÓN DE FLUJO: ¿Login o App Principal?
+                if (viewModel.isLoggedIn.value) {
+                    NewsickApp(windowSize.widthSizeClass, viewModel)
+                } else {
+                    AuthScreen(viewModel)
+                }
             }
         }
     }
 }
 
-// --- ESTRUCTURA DE NAVEGACIÓN Y ADAPTABILIDAD ---
+// --- 5. PANTALLA DE AUTENTICACIÓN (NUEVA) ---
+@Composable
+fun AuthScreen(viewModel: MainViewModel) {
+    var username by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    val isRegistering = viewModel.isRegistering.value
+    val isLoading = viewModel.isLoading.collectAsState().value
+
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            modifier = Modifier
+                .padding(32.dp)
+                .fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.MusicNote,
+                contentDescription = null,
+                modifier = Modifier.size(80.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = if (isRegistering) "Crea tu cuenta" else "Bienvenido a Newsick",
+                style = MaterialTheme.typography.headlineMedium
+            )
+
+            Spacer(modifier = Modifier.height(32.dp))
+
+            // Campos de texto
+            OutlinedTextField(
+                value = username,
+                onValueChange = { username = it },
+                label = { Text("Usuario") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedTextField(
+                value = password,
+                onValueChange = { password = it },
+                label = { Text("Contraseña") },
+                modifier = Modifier.fillMaxWidth(),
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                singleLine = true
+            )
+
+            // Mensaje de error
+            viewModel.authError.value?.let { error ->
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(text = error, color = MaterialTheme.colorScheme.error)
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // Botón Principal
+            Button(
+                onClick = {
+                    if (isRegistering) {
+                        viewModel.performRegister(username, password)
+                    } else {
+                        viewModel.performLogin(username, password)
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !isLoading
+            ) {
+                if (isLoading) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), color = Color.White)
+                } else {
+                    Text(if (isRegistering) "Registrarse" else "Iniciar Sesión")
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Switch entre Login y Registro
+            TextButton(onClick = { viewModel.isRegistering.value = !isRegistering }) {
+                Text(if (isRegistering) "¿Ya tienes cuenta? Entra aquí" else "¿No tienes cuenta? Regístrate")
+            }
+        }
+    }
+}
+
+// --- 6. ESTRUCTURA DE NAVEGACIÓN (APP PRINCIPAL) ---
 @Composable
 fun NewsickApp(windowSize: WindowWidthSizeClass, viewModel: MainViewModel) {
     val navController = rememberNavController()
@@ -147,21 +362,18 @@ fun NewsickApp(windowSize: WindowWidthSizeClass, viewModel: MainViewModel) {
     Scaffold(
         bottomBar = {
             NavigationBar {
-                // 1. IZQUIERDA: Buscador / Social
                 NavigationBarItem(
                     icon = { Icon(Icons.Default.Search, contentDescription = "Descubrir") },
                     label = { Text("Social") },
                     selected = navController.currentDestination?.route == "search",
                     onClick = { navController.navigate("search") }
                 )
-                // 2. CENTRO: Mapa
                 NavigationBarItem(
                     icon = { Icon(Icons.Default.Place, contentDescription = "Mapa") },
                     label = { Text("Mapa") },
                     selected = navController.currentDestination?.route == "map",
                     onClick = { navController.navigate("map") }
                 )
-                // 3. DERECHA: Perfil
                 NavigationBarItem(
                     icon = { Icon(Icons.Default.Person, contentDescription = "Perfil") },
                     label = { Text("Yo") },
@@ -176,45 +388,35 @@ fun NewsickApp(windowSize: WindowWidthSizeClass, viewModel: MainViewModel) {
             startDestination = "search",
             modifier = Modifier.padding(innerPadding)
         ) {
-            // RUTA 1: BUSCADOR Y PORTADAS
             composable("search") {
                 SocialSearchScreen(viewModel) { songId ->
                     navController.navigate("feed/$songId")
                 }
             }
-            // DETALLE DE FOTOS (Al pulsar una portada)
             composable("feed/{songId}") {
                 SocialFeedScreen()
             }
-
-            // RUTA 2: MAPA
             composable("map") {
                 MapScreen(viewModel)
             }
-
-            // RUTA 3: PERFIL
             composable("profile") {
                 UserProfileScreen(
                     viewModel = viewModel,
                     onSettingsClick = { navController.navigate("settings") }
                 )
             }
-
-            // CONFIGURACION (FEEDBACK)
             composable("settings") {
-                Pantalla() // Reusamos la pantalla de Feedback/About
+                Pantalla(onLogout = { viewModel.logout() }) // Pasamos la función de logout
             }
         }
     }
 }
 
-// --- PANTALLAS (SCREENS) ---
+// --- PANTALLAS PRINCIPALES (Sin cambios mayores, solo integración) ---
 
-// 1. PANTALLA IZQUIERDA: Buscador y Portadas
 @Composable
 fun SocialSearchScreen(viewModel: MainViewModel, onCoverClick: (Int) -> Unit) {
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        // Barra de búsqueda (Usuarios)
         OutlinedTextField(
             value = viewModel.userSearchQuery.value,
             onValueChange = { viewModel.userSearchQuery.value = it },
@@ -223,19 +425,16 @@ fun SocialSearchScreen(viewModel: MainViewModel, onCoverClick: (Int) -> Unit) {
             leadingIcon = { Icon(Icons.Default.PersonSearch, null) },
             shape = RoundedCornerShape(24.dp)
         )
-
         Spacer(modifier = Modifier.height(16.dp))
         Text("Explora Momentos Musicales", style = MaterialTheme.typography.titleMedium, color = Color.Gray)
         Spacer(modifier = Modifier.height(8.dp))
 
-        // Grid de Portadas
         LazyVerticalGrid(
             columns = GridCells.Fixed(2),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             items(viewModel.items) { item ->
-                // Portada simulada
                 Box(
                     modifier = Modifier
                         .aspectRatio(1f)
@@ -251,20 +450,10 @@ fun SocialSearchScreen(viewModel: MainViewModel, onCoverClick: (Int) -> Unit) {
                     }
                 }
             }
-            // Espacio extra para scroll infinito simulado
-            items(10) {
-                Box(
-                    modifier = Modifier
-                        .aspectRatio(1f)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Color.Gray.copy(alpha = 0.2f))
-                )
-            }
         }
     }
 }
 
-// Sub-pantalla: Feed de fotos (al pulsar portada)
 @Composable
 fun SocialFeedScreen() {
     LazyColumn(contentPadding = PaddingValues(16.dp)) {
@@ -272,67 +461,36 @@ fun SocialFeedScreen() {
             Text("Fotos de la comunidad", style = MaterialTheme.typography.headlineMedium)
             Spacer(modifier = Modifier.height(16.dp))
         }
-        items(5) { index ->
+        items(3) { index ->
             Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(300.dp)
-                    .padding(vertical = 8.dp),
+                modifier = Modifier.fillMaxWidth().height(200.dp).padding(vertical = 8.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
             ) {
-                Column {
-                    // Header del post
-                    Row(modifier = Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.AccountCircle, null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Usuario_$index", style = MaterialTheme.typography.labelLarge)
-                    }
-                    // Foto simulada
-                    Box(modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .background(Color.DarkGray),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(Icons.Default.Image, null, tint = Color.White, modifier = Modifier.size(64.dp))
-                    }
-                    // Pie del post
-                    Text(
-                        text = "Escuchando este temazo 🎶",
-                        modifier = Modifier.padding(8.dp),
-                        style = MaterialTheme.typography.bodyMedium
-                    )
+                Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                    Text("Post simulado #$index")
                 }
             }
         }
     }
 }
 
-// 2. PANTALLA CENTRAL: Mapa
 @Composable
 fun MapScreen(viewModel: MainViewModel) {
     Box(modifier = Modifier.fillMaxSize()) {
-        // Fondo simulando mapa
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color(0xFFE3F2FD)), // Azul mapa claro
+            modifier = Modifier.fillMaxSize().background(Color(0xFFE3F2FD)),
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Icon(Icons.Default.Place, null, modifier = Modifier.size(64.dp), tint = Color.Red)
             Text("Mapa de Eventos", color = Color.Gray)
         }
-
-        // Barra de búsqueda flotante arriba
         Column(modifier = Modifier.padding(16.dp)) {
             OutlinedTextField(
                 value = viewModel.mapSearchQuery.value,
                 onValueChange = { viewModel.mapSearchQuery.value = it },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(24.dp)),
-                placeholder = { Text("Buscar ciudad o evento...") },
+                modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface, RoundedCornerShape(24.dp)),
+                placeholder = { Text("Buscar ciudad...") },
                 leadingIcon = { Icon(Icons.Default.Search, null) },
                 shape = RoundedCornerShape(24.dp)
             )
@@ -340,79 +498,44 @@ fun MapScreen(viewModel: MainViewModel) {
     }
 }
 
-// 3. PANTALLA DERECHA: Perfil + Configuración
 @Composable
 fun UserProfileScreen(viewModel: MainViewModel, onSettingsClick: () -> Unit) {
     Scaffold(
         topBar = {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text("Mi Perfil", style = MaterialTheme.typography.headlineMedium)
-                // Botón Configuración (Feedback)
                 IconButton(onClick = onSettingsClick) {
                     Icon(Icons.Default.Settings, "Configuración", modifier = Modifier.size(32.dp))
                 }
             }
         }
     ) { padding ->
-        Column(modifier = Modifier
-            .padding(padding)
-            .padding(16.dp)) {
-            // Cabecera de usuario
+        Column(modifier = Modifier.padding(padding).padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Default.AccountCircle, null, modifier = Modifier.size(80.dp), tint = MaterialTheme.colorScheme.primary)
                 Spacer(Modifier.width(16.dp))
                 Column {
-                    Text("Makro17", style = MaterialTheme.typography.titleLarge)
-                    Text("Melómano Experto", color = CustomGold)
+                    Text("Usuario", style = MaterialTheme.typography.titleLarge)
+                    Text("Melómano", color = CustomGold)
                 }
             }
-
             Spacer(Modifier.height(24.dp))
-
-            Button(
-                onClick = { viewModel.addFriendCollection() },
-                modifier = Modifier.fillMaxWidth()
-            ) {
+            Button(onClick = { viewModel.addFriendCollection() }, modifier = Modifier.fillMaxWidth()) {
                 Icon(Icons.Default.Add, null)
                 Spacer(Modifier.width(8.dp))
                 Text("Añadir canción")
             }
-
             Spacer(Modifier.height(24.dp))
-            Text("Canciones", style = MaterialTheme.typography.titleMedium)
-
+            Text("Mis Canciones", style = MaterialTheme.typography.titleMedium)
             LazyColumn(modifier = Modifier.padding(top = 8.dp)) {
                 items(viewModel.friendCollections) { collection ->
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-                    ) {
-                        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                            // Miniaturas de fotos de amigos (simuladas)
-                            Row(modifier = Modifier.weight(1f)) {
-                                collection.friendNames.take(3).forEach { _ ->
-                                    Box(
-                                        modifier = Modifier
-                                            .size(30.dp)
-                                            .clip(CircleShape)
-                                            .background(Color.Gray)
-                                            .border(1.dp, Color.White, CircleShape)
-                                    )
-                                    Spacer(Modifier.width(4.dp))
-                                }
-                            }
-                            Column(modifier = Modifier.weight(2f)) {
-                                Text(collection.songTitle, fontWeight = FontWeight.Bold)
-                                Text("Con: ${collection.friendNames.joinToString(", ")}", style = MaterialTheme.typography.bodySmall)
-                            }
+                    Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                        Row(modifier = Modifier.padding(16.dp)) {
+                            Text(collection.songTitle, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -421,13 +544,17 @@ fun UserProfileScreen(viewModel: MainViewModel, onSettingsClick: () -> Unit) {
     }
 }
 
-// --- PANTALLA DE FEEDBACK (SETTINGS) ---
+// --- PANTALLA SETTINGS (Con Botón de Logout) ---
 @Composable
-fun Pantalla(modifier: Modifier = Modifier) {
+fun Pantalla(
+    modifier: Modifier = Modifier,
+    onLogout: () -> Unit
+) {
     val appName = "Newsick"
     val appTheme = "Neon Music Night"
     val appDescription = "Configuración y Feedback de la aplicación."
     val appVersion = "2.0"
+
     val context = LocalContext.current
 
     Column(
@@ -437,6 +564,7 @@ fun Pantalla(modifier: Modifier = Modifier) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
+
         Text(
             text = appName,
             style = MaterialTheme.typography.headlineLarge,
@@ -461,10 +589,11 @@ fun Pantalla(modifier: Modifier = Modifier) {
 
         Spacer(modifier = Modifier.height(24.dp))
 
+        // BOTÓN ENVIAR FEEDBACK (EMAIL REAL)
         Button(onClick = {
             val email = "marcosqh17@gmail.com"
             val subject = "Feedback sobre $appName"
-            val body = "Hola, tengo el siguiente feedback..."
+            val body = "Hola,\n\nTengo el siguiente feedback sobre la aplicación:\n\n"
 
             val intent = Intent(Intent.ACTION_SENDTO).apply {
                 data = Uri.parse("mailto:")
@@ -472,18 +601,37 @@ fun Pantalla(modifier: Modifier = Modifier) {
                 putExtra(Intent.EXTRA_SUBJECT, subject)
                 putExtra(Intent.EXTRA_TEXT, body)
             }
+
             try {
                 context.startActivity(intent)
             } catch (e: ActivityNotFoundException) {
-                Toast.makeText(context, "No se encontró app de correo", Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    context,
+                    "No se encontró una app de correo",
+                    Toast.LENGTH_SHORT
+                ).show()
             }
         }) {
-            Icon(Icons.Filled.Email, contentDescription = "contacto")
+            Icon(Icons.Filled.Email, contentDescription = "Enviar feedback")
             Spacer(Modifier.width(8.dp))
             Text("Enviar Feedback")
         }
 
         Spacer(modifier = Modifier.height(16.dp))
+
+        // BOTÓN CERRAR SESIÓN
+        OutlinedButton(
+            onClick = onLogout,
+            colors = ButtonDefaults.outlinedButtonColors(
+                contentColor = MaterialTheme.colorScheme.error
+            )
+        ) {
+            Icon(Icons.Default.ExitToApp, contentDescription = "Cerrar sesión")
+            Spacer(Modifier.width(8.dp))
+            Text("Cerrar Sesión")
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
 
         Text(
             text = appVersion,

@@ -7,7 +7,7 @@ plugins {
 android {
     namespace = "com.makro17.newsick"
     compileSdk {
-        version = release(36)
+        version = release(35)
     }
 
     defaultConfig {
@@ -58,8 +58,10 @@ dependencies {
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
-    implementation("androidx.core:core-splashscreen:1.2.0")
-    implementation("androidx.compose.material3:material3-window-size-class:1.1.2")
-    implementation("androidx.navigation:navigation-compose:2.7.6")
-    implementation("androidx.compose.material:material-icons-extended:1.5.4")
+    implementation(libs.androidx.core.splashscreen)
+    implementation(libs.androidx.material3.window.size)
+    implementation(libs.androidx.navigation.compose)
+    implementation(libs.androidx.icons.extended)
+    implementation(libs.retrofit.core)
+    implementation(libs.retrofit.gson)
 }
