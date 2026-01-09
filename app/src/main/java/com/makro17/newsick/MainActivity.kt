@@ -86,10 +86,12 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.makro17.newsick.ui.theme.CustomGold
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.Body
@@ -103,16 +105,16 @@ data class AuthResponse(val success: Boolean, val token: String?, val message: S
 // Interfaz para comunicarse con TU servidor
 interface ApiService {
     // Estas rutas deben existir en tu servidor backend
-    @POST("/api/login")
+    @POST("/api/login.php")
     suspend fun login(@Body request: AuthRequest): AuthResponse
 
-    @POST("/api/register")
+    @POST("/api/register.php")
     suspend fun register(@Body request: AuthRequest): AuthResponse
 }
 
 // Objeto Singleton para crear la conexión
 object RetrofitInstance {
-    private const val BASE_URL = "http://192.168.0.171:3000/"
+    private const val BASE_URL = "https://jumiquihe68.s3.tnas2.link:477/"
 
     val api: ApiService by lazy {
         Retrofit.Builder()
@@ -182,46 +184,62 @@ class MainViewModel : androidx.lifecycle.ViewModel() {
             _isLoading.value = true
             authError.value = null
             try {
-                // LLAMADA REAL AL SERVIDOR:
-                // val response = RetrofitInstance.api.login(AuthRequest(user, pass))
-
-                // SIMULACIÓN (Para que te funcione mientras configuras el servidor):
-                delay(1500) // Simular red
-                val response = AuthResponse(success = true, token = "fake_token_123", message = "OK")
+                // --- CÓDIGO REAL ACTIVADO ---
+                // Nota: Asegúrate de usar Dispatchers.IO para red
+                val response = withContext(Dispatchers.IO) {
+                    RetrofitInstance.api.login(AuthRequest(user, pass))
+                }
 
                 if (response.success) {
                     isLoggedIn.value = true
+                    // Opcional: Guardar response.token en DataStore/SharedPreferences aquí
                 } else {
                     authError.value = response.message ?: "Error al iniciar sesión"
                 }
             } catch (e: Exception) {
-                authError.value = "Error de conexión: ${e.localizedMessage}"
+                // Útil para debugging: imprime el error en Logcat
+                e.printStackTrace()
+                authError.value = "Error de conexión: ${e.message}"
             } finally {
                 _isLoading.value = false
             }
         }
     }
 
+    // Haz lo mismo para performRegister...
+
     fun performRegister(user: String, pass: String) {
         viewModelScope.launch {
+            // 1. Activar estado de carga (muestra el círculo giratorio)
             _isLoading.value = true
             authError.value = null
+
             try {
-                // LLAMADA REAL AL SERVIDOR:
-                // val response = RetrofitInstance.api.register(AuthRequest(user, pass))
-
-                // SIMULACIÓN:
-                delay(1500)
-                val response = AuthResponse(success = true, token = "fake_token_new", message = "Cuenta creada")
-
-                if (response.success) {
-                    isLoggedIn.value = true // Entra directo tras registro
-                } else {
-                    authError.value = response.message ?: "Error al registrar"
+                // 2. Llamada real a la red (IO Thread)
+                // Usamos withContext(Dispatchers.IO) para mover esto fuera del hilo principal
+                val response = withContext(Dispatchers.IO) {
+                    RetrofitInstance.api.register(AuthRequest(user, pass))
                 }
+
+                // 3. Verificar respuesta del servidor
+                if (response.success) {
+                    // ÉXITO: El servidor creó el usuario
+                    println("Registro exitoso. Token: ${response.token}")
+
+                    // Aquí podrías guardar el token en DataStore si quisieras persistencia
+                    // Por ahora, solo dejamos pasar al usuario:
+                    isLoggedIn.value = true
+                } else {
+                    // ERROR DEL SERVIDOR (ej: "Usuario ya existe")
+                    authError.value = response.message ?: "Error desconocido al registrar"
+                }
+
             } catch (e: Exception) {
+                // 4. ERROR DE CONEXIÓN (ej: Servidor apagado, sin internet, timeout)
+                e.printStackTrace() // Ver error exacto en Logcat
                 authError.value = "Error de conexión: ${e.localizedMessage}"
             } finally {
+                // 5. Desactivar estado de carga siempre (haya éxito o error)
                 _isLoading.value = false
             }
         }
