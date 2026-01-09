@@ -35,6 +35,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.MusicNote
@@ -43,6 +44,7 @@ import androidx.compose.material.icons.filled.PersonSearch
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -55,6 +57,7 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -99,7 +102,12 @@ import retrofit2.http.POST
 
 // --- 1. CAPA DE RED (NETWORKING) ---
 // Define cómo son los datos que envías y recibes del servidor
-data class AuthRequest(val username: String, val password: String)
+// El username es opcional (?) porque en el Login no lo enviamos, solo en el Registro
+data class AuthRequest(
+    val email: String,
+    val password: String,
+    val username: String? = null
+)
 data class AuthResponse(val success: Boolean, val token: String?, val message: String?)
 
 // Interfaz para comunicarse con TU servidor
@@ -149,10 +157,10 @@ class MainViewModel : androidx.lifecycle.ViewModel() {
     var isLoggedIn = mutableStateOf(false) // ¿El usuario entró?
     var authError = mutableStateOf<String?>(null) // Errores de login
     var isRegistering = mutableStateOf(false) // ¿Está en pantalla de registro?
-
     // Estado para las barras de búsqueda (App Principal)
     var userSearchQuery = mutableStateOf("")
     var mapSearchQuery = mutableStateOf("")
+    var needsUsername = mutableStateOf(false)
 
     // Datos simulados (Se cargarían tras el login)
     val items = mutableStateListOf(
@@ -179,7 +187,8 @@ class MainViewModel : androidx.lifecycle.ViewModel() {
     }
 
     // --- LÓGICA DE LOGIN / REGISTRO ---
-    fun performLogin(user: String, pass: String) {
+    // LOGIN: Enviamos email y pass (username se queda como null)
+    fun performLogin(email: String, pass: String) {
         viewModelScope.launch {
             _isLoading.value = true
             authError.value = null
@@ -187,7 +196,7 @@ class MainViewModel : androidx.lifecycle.ViewModel() {
                 // --- CÓDIGO REAL ACTIVADO ---
                 // Nota: Asegúrate de usar Dispatchers.IO para red
                 val response = withContext(Dispatchers.IO) {
-                    RetrofitInstance.api.login(AuthRequest(user, pass))
+                    RetrofitInstance.api.login(AuthRequest(email = email, password = pass))
                 }
 
                 if (response.success) {
@@ -208,7 +217,7 @@ class MainViewModel : androidx.lifecycle.ViewModel() {
 
     // Haz lo mismo para performRegister...
 
-    fun performRegister(user: String, pass: String) {
+    fun performRegister(email: String, pass: String, username: String) {
         viewModelScope.launch {
             // 1. Activar estado de carga (muestra el círculo giratorio)
             _isLoading.value = true
@@ -218,7 +227,7 @@ class MainViewModel : androidx.lifecycle.ViewModel() {
                 // 2. Llamada real a la red (IO Thread)
                 // Usamos withContext(Dispatchers.IO) para mover esto fuera del hilo principal
                 val response = withContext(Dispatchers.IO) {
-                    RetrofitInstance.api.register(AuthRequest(user, pass))
+                    RetrofitInstance.api.register(AuthRequest(email, pass, username))
                 }
 
                 // 3. Verificar respuesta del servidor
@@ -286,10 +295,16 @@ class MainActivity : ComponentActivity() {
 // --- 5. PANTALLA DE AUTENTICACIÓN (NUEVA) ---
 @Composable
 fun AuthScreen(viewModel: MainViewModel) {
-    var username by remember { mutableStateOf("") }
+    // Estados locales para los campos de texto
+    var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var chosenUsername by remember { mutableStateOf("") }
+
+    // Estados observados desde el ViewModel
     val isRegistering = viewModel.isRegistering.value
+    val needsUsername = viewModel.needsUsername.value // Debes añadir este booleano en tu ViewModel
     val isLoading = viewModel.isLoading.collectAsState().value
+    val authError = viewModel.authError.value
 
     Box(
         modifier = Modifier.fillMaxSize(),
@@ -302,71 +317,126 @@ fun AuthScreen(viewModel: MainViewModel) {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
+            // Icono dinámico según el paso
             Icon(
-                imageVector = Icons.Default.MusicNote,
+                imageVector = if (needsUsername) Icons.Default.AccountCircle else Icons.Default.MusicNote,
                 contentDescription = null,
                 modifier = Modifier.size(80.dp),
                 tint = MaterialTheme.colorScheme.primary
             )
+
             Spacer(modifier = Modifier.height(16.dp))
+
+            // Título dinámico
             Text(
-                text = if (isRegistering) "Crea tu cuenta" else "Bienvenido a Newsick",
+                text = when {
+                    needsUsername -> "Configura tu perfil"
+                    isRegistering -> "Crea tu cuenta"
+                    else -> "Bienvenido a Newsick"
+                },
                 style = MaterialTheme.typography.headlineMedium
             )
 
             Spacer(modifier = Modifier.height(32.dp))
 
-            // Campos de texto
-            OutlinedTextField(
-                value = username,
-                onValueChange = { username = it },
-                label = { Text("Usuario") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            OutlinedTextField(
-                value = password,
-                onValueChange = { password = it },
-                label = { Text("Contraseña") },
-                modifier = Modifier.fillMaxWidth(),
-                visualTransformation = PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                singleLine = true
-            )
+            if (!needsUsername) {
+                // --- PASO 1: LOGIN O REGISTRO INICIAL ---
+                OutlinedTextField(
+                    value = email,
+                    onValueChange = { email = it },
+                    label = { Text("Correo electrónico") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email)
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text("Contraseña") },
+                    modifier = Modifier.fillMaxWidth(),
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    singleLine = true
+                )
+            } else {
+                // --- PASO 2: NOMBRE DE USUARIO OBLIGATORIO (Solo tras registro) ---
+                Text(
+                    text = "Por favor, elige un nombre de usuario para continuar. Este nombre será público.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+
+                OutlinedTextField(
+                    value = chosenUsername,
+                    onValueChange = { chosenUsername = it },
+                    label = { Text("Nombre de usuario") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    placeholder = { Text("@ejemplo") }
+                )
+            }
 
             // Mensaje de error
-            viewModel.authError.value?.let { error ->
+            authError?.let { error ->
                 Spacer(modifier = Modifier.height(8.dp))
-                Text(text = error, color = MaterialTheme.colorScheme.error)
+                Text(text = error, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
             }
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            // Botón Principal
+            // Botón de acción principal
             Button(
                 onClick = {
-                    if (isRegistering) {
-                        viewModel.performRegister(username, password)
+                    if (needsUsername) {
+                        // Finalizar registro con el nombre de usuario
+                        viewModel.performRegister(email, password, chosenUsername)
+                    } else if (isRegistering) {
+                        // Validar correo/pass y pasar al siguiente paso
+                        if (email.contains("@") && password.length >= 6) {
+                            viewModel.needsUsername.value = true
+                        } else {
+                            viewModel.authError.value = "Introduce un correo válido y 6 caracteres mínimo"
+                        }
                     } else {
-                        viewModel.performLogin(username, password)
+                        // Login normal
+                        viewModel.performLogin(email, password)
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),
-                enabled = !isLoading
+                enabled = !isLoading && (if (needsUsername) chosenUsername.isNotBlank() else true)
             ) {
                 if (isLoading) {
                     CircularProgressIndicator(modifier = Modifier.size(20.dp), color = Color.White)
                 } else {
-                    Text(if (isRegistering) "Registrarse" else "Iniciar Sesión")
+                    Text(
+                        text = when {
+                            needsUsername -> "Finalizar y Entrar"
+                            isRegistering -> "Siguiente"
+                            else -> "Iniciar Sesión"
+                        }
+                    )
                 }
             }
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Switch entre Login y Registro
-            TextButton(onClick = { viewModel.isRegistering.value = !isRegistering }) {
-                Text(if (isRegistering) "¿Ya tienes cuenta? Entra aquí" else "¿No tienes cuenta? Regístrate")
+            // Botón para alternar entre Login y Registro (Solo visible en paso 1)
+            if (!needsUsername) {
+                TextButton(onClick = {
+                    viewModel.isRegistering.value = !isRegistering
+                    viewModel.authError.value = null
+                }) {
+                    Text(if (isRegistering) "¿Ya tienes cuenta? Entra aquí" else "¿No tienes cuenta? Regístrate")
+                }
+            } else {
+                // Botón para volver atrás si se equivocó de correo
+                TextButton(onClick = { viewModel.needsUsername.value = false }) {
+                    Text("Volver atrás")
+                }
             }
         }
     }
@@ -439,7 +509,7 @@ fun SocialSearchScreen(viewModel: MainViewModel, onCoverClick: (Int) -> Unit) {
             value = viewModel.userSearchQuery.value,
             onValueChange = { viewModel.userSearchQuery.value = it },
             modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("Buscar usuario (@makro...)") },
+            placeholder = { Text("Buscar usuario (...)") },
             leadingIcon = { Icon(Icons.Default.PersonSearch, null) },
             shape = RoundedCornerShape(24.dp)
         )
@@ -518,6 +588,11 @@ fun MapScreen(viewModel: MainViewModel) {
 
 @Composable
 fun UserProfileScreen(viewModel: MainViewModel, onSettingsClick: () -> Unit) {
+    var showEditDialog by remember { mutableStateOf(false) }
+
+    // Datos de ejemplo del perfil (esto vendría del ViewModel)
+    var userBio by remember { mutableStateOf("Amante de la música electrónica y el café.") }
+    var currentUsername by remember { mutableStateOf("Marcos_Music") }
     Scaffold(
         topBar = {
             Row(
@@ -533,33 +608,80 @@ fun UserProfileScreen(viewModel: MainViewModel, onSettingsClick: () -> Unit) {
         }
     ) { padding ->
         Column(modifier = Modifier.padding(padding).padding(16.dp)) {
+            // CABECERA
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.AccountCircle, null, modifier = Modifier.size(80.dp), tint = MaterialTheme.colorScheme.primary)
+                Box {
+                    Icon(Icons.Default.AccountCircle, null, modifier = Modifier.size(80.dp))
+                    // Botón para cambiar foto (Solo visible aquí o en el diálogo)
+                }
                 Spacer(Modifier.width(16.dp))
-                Column {
-                    Text("Usuario", style = MaterialTheme.typography.titleLarge)
-                    Text("Melómano", color = CustomGold)
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(currentUsername, style = MaterialTheme.typography.titleLarge)
+                    Text(userBio, style = MaterialTheme.typography.bodyMedium)
+                }
+
+                // BOTÓN EDITAR (Solo para el dueño)
+                IconButton(onClick = { showEditDialog = true }) {
+                    Icon(Icons.Default.Edit, "Editar Perfil")
                 }
             }
             Spacer(Modifier.height(24.dp))
-            Button(onClick = { viewModel.addFriendCollection() }, modifier = Modifier.fillMaxWidth()) {
-                Icon(Icons.Default.Add, null)
-                Spacer(Modifier.width(8.dp))
-                Text("Añadir canción")
-            }
-            Spacer(Modifier.height(24.dp))
             Text("Mis Canciones", style = MaterialTheme.typography.titleMedium)
-            LazyColumn(modifier = Modifier.padding(top = 8.dp)) {
+
+            // CANCIONES EN DOS COLUMNAS (Igual que SocialSearchScreen)
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(2),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxSize()
+            ) {
                 items(viewModel.friendCollections) { collection ->
-                    Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                        Row(modifier = Modifier.padding(16.dp)) {
-                            Text(collection.songTitle, fontWeight = FontWeight.Bold)
+                    Card(modifier = Modifier.aspectRatio(1f)) {
+                        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                            Text(collection.songTitle, textAlign = TextAlign.Center)
                         }
                     }
                 }
             }
         }
     }
+    // DIÁLOGO DE EDICIÓN
+    if (showEditDialog) {
+        EditProfileDialog(
+            onDismiss = { showEditDialog = false },
+            onSave = { /* Lógica para guardar en servidor */ }
+        )
+    }
+}
+
+@Composable
+fun EditProfileDialog(onDismiss: () -> Unit, onSave: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Editar Perfil") },
+        text = {
+            Column {
+                OutlinedButton(onClick = { /* Abrir Galería */ }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Cambiar Foto de Perfil")
+                }
+                OutlinedTextField(value = "Marcos_Music", onValueChange = {}, label = { Text("Nombre de Usuario") })
+
+                Text("Género", modifier = Modifier.padding(top = 8.dp))
+                Row {
+                    RadioButton(selected = true, onClick = {})
+                    Text("Masculino", modifier = Modifier.align(Alignment.CenterVertically))
+                    Spacer(Modifier.width(8.dp))
+                    RadioButton(selected = false, onClick = {})
+                    Text("Femenino", modifier = Modifier.align(Alignment.CenterVertically))
+                }
+
+                OutlinedButton(onClick = { /* Mostrar DatePicker */ }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Fecha de Nacimiento (Privada)")
+                }
+            }
+        },
+        confirmButton = { Button(onClick = onSave) { Text("Guardar") } }
+    )
 }
 
 // --- PANTALLA SETTINGS (Con Botón de Logout) ---
