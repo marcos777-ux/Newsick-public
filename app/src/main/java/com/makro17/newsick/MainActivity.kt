@@ -40,21 +40,28 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Divider
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
@@ -76,16 +83,21 @@ import androidx.compose.ui.unit.dp
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.makro17.newsick.ui.theme.CustomAlert
 import com.makro17.newsick.ui.theme.CustomGold
-import com.makro17.newsick.ui.theme.NewsickTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+
+// --- COLORES PERSONALIZADOS PARA EL TEMA ---
+val CustomGold = Color(0xFFFFD700)
+val CustomAlert = Color(0xFFD32F2F)
 
 // --- MODELOS DE DATOS ---
 data class MusicItem(
@@ -99,41 +111,55 @@ data class MusicItem(
 
 data class Comment(val author: String, val text: String)
 
-// --- VIEWMODEL SIMULADO ---
+// --- VIEWMODEL ---
 class MainViewModel : ViewModel() {
     private val _isLoading = MutableStateFlow(true)
     val isLoading = _isLoading.asStateFlow()
 
+    // Estado del buscador
+    var searchQuery by mutableStateOf("")
+
     // Datos simulados
-    val items = mutableStateListOf(
+    private val _items = mutableStateListOf(
         MusicItem(1, "Neon Nights", "CyberPunks", "Synthwave puro para programar.", "Electronic"),
-        MusicItem(2, "Jazz Café", "Blue Note Trio", "Jazz suave para relajarse.", "Jazz"),
+        MusicItem(2, "Jazz Cafe", "Blue Note Trio", "Jazz suave para relajarse.", "Jazz"), // Quitamos acento para facilitar url
         MusicItem(3, "Heavy Code", "The Compilers", "Metal progresivo intenso.", "Metal"),
         MusicItem(4, "Lo-Fi Study", "Chill Hop", "Beats para estudiar.", "Lo-Fi")
     )
+    val items: List<MusicItem> get() = _items
 
-    val favorites = derivedStateOf { items.filter { it.isFavorite } }
+    // Lista filtrada por búsqueda (insensible a mayúsculas y lugar)
+    val filteredItems: List<MusicItem>
+        get() = if (searchQuery.isEmpty()) _items else _items.filter {
+            it.title.contains(searchQuery, ignoreCase = true) ||
+                    it.artist.contains(searchQuery, ignoreCase = true)
+        }
+
+    val favorites = derivedStateOf { _items.filter { it.isFavorite } }
     val comments = mutableStateListOf<Comment>()
 
     init {
         viewModelScope.launch {
             delay(1000)
             _isLoading.value = false
-            // Comentarios dummy
             comments.add(Comment("User1", "Increíble tema!"))
             comments.add(Comment("User2", "Necesito más bajo."))
         }
     }
 
     fun toggleFavorite(item: MusicItem) {
-        val index = items.indexOfFirst { it.id == item.id }
+        val index = _items.indexOfFirst { it.id == item.id }
         if (index != -1) {
-            items[index] = items[index].copy(isFavorite = !items[index].isFavorite)
+            _items[index] = _items[index].copy(isFavorite = !_items[index].isFavorite)
         }
     }
 
     fun addComment(text: String) {
         comments.add(Comment("Me", text))
+    }
+
+    fun updateSearch(query: String) {
+        searchQuery = query
     }
 }
 
@@ -149,8 +175,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         setContent {
-            NewsickTheme {
-                // Cálculo del tamaño de ventana para diseño adaptativo
+            MaterialTheme(colorScheme = darkColorScheme()) { // Tema oscuro por defecto para estilo Neon
                 val windowSize = calculateWindowSizeClass(this)
                 NewsickApp(windowSize.widthSizeClass, viewModel)
             }
@@ -162,99 +187,198 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun NewsickApp(windowSize: WindowWidthSizeClass, viewModel: MainViewModel) {
     val navController = rememberNavController()
-    // Determinar si usamos layout expandido (Tablet/Horizontal)
+    // Determinar si es pantalla expandida (Tablet/Landscape)
     val isExpanded = windowSize == WindowWidthSizeClass.Expanded || windowSize == WindowWidthSizeClass.Medium
 
-    Scaffold(
-        bottomBar = {
-            if (!isExpanded) { // BottomBar solo en móvil compacto
-                BottomAppBar {
-                    IconButton(onClick = { navController.navigate("list") }) {
-                        Icon(Icons.Default.Home, "Inicio")
-                    }
-                    IconButton(onClick = { navController.navigate("favs") }) {
-                        Icon(Icons.Default.Favorite, "Favoritos")
-                    }
-                    IconButton(onClick = { navController.navigate("profile") }) {
-                        Icon(Icons.Default.Person, "Perfil")
-                    }
-                    IconButton(onClick = { navController.navigate("about") }) {
-                        Icon(Icons.Default.Info, "About")
-                    }
+    Row(modifier = Modifier.fillMaxSize()) {
+        // 1. MENÚ DE NAVEGACIÓN (Rail para Expanded, BottomBar dentro de Scaffold para Compact)
+        if (isExpanded) {
+            NewsickNavRail(navController)
+        }
+
+        Scaffold(
+            bottomBar = {
+                if (!isExpanded) {
+                    NewsickBottomBar(navController)
                 }
             }
-        }
-    ) { innerPadding ->
-        NavHost(
-            navController = navController,
-            startDestination = "list",
-            modifier = Modifier.padding(innerPadding)
-        ) {
-            composable("list") {
-                if (isExpanded) {
-                    // LAYOUT ADAPTATIVO: LISTA + DETALLE
-                    SplitScreen(viewModel)
-                } else {
-                    // LAYOUT COMPACTO: SOLO LISTA
-                    ElemListScreen(
-                        items = viewModel.items,
-                        onItemClick = { item -> navController.navigate("detail/${item.id}") },
-                        onFavClick = { viewModel.toggleFavorite(it) }
+        ) { innerPadding ->
+            NavHost(
+                navController = navController,
+                startDestination = "ElementList", // Ruta inicial
+                modifier = Modifier.padding(innerPadding)
+            ) {
+                // RUTA 1: LISTA DE ELEMENTOS (HOME)
+                composable("ElementList") {
+                    if (isExpanded) {
+                        // MODO EXPANDIDO: VISTA DIVIDIDA
+                        SplitScreen(viewModel)
+                    } else {
+                        // MODO COMPACTO: SOLO LISTA CON BUSCADOR
+                        ElemListScreen(
+                            items = viewModel.filteredItems,
+                            searchQuery = viewModel.searchQuery,
+                            onSearchChange = { viewModel.updateSearch(it) },
+                            onItemClick = { item -> navController.navigate("detail/${item.title}") }, // Navegación por NOMBRE
+                            onFavClick = { viewModel.toggleFavorite(it) }
+                        )
+                    }
+                }
+
+                // RUTA 2: DETALLES ELEMENTO (POR NOMBRE)
+                composable("detail/{itemName}") { backStackEntry ->
+                    val itemName = backStackEntry.arguments?.getString("itemName")
+                    // Buscamos por nombre como pide el enunciado
+                    val item = viewModel.items.find { it.title == itemName }
+
+                    if (item != null) {
+                        DetailItemScreen(item) { viewModel.toggleFavorite(item) }
+                    } else {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Elemento no encontrado") }
+                    }
+                }
+
+                // RUTA 3: FAVORITOS
+                composable("FavList") {
+                    FavListScreen(
+                        favs = viewModel.favorites.value,
+                        onRemove = { viewModel.toggleFavorite(it) }, // Dialog manejado dentro de la Screen
+                        onItemClick = { navController.navigate("favDetail/${it.title}") } // Navegación por NOMBRE
                     )
                 }
-            }
-            composable("detail/{itemId}") { backStackEntry ->
-                val itemId = backStackEntry.arguments?.getString("itemId")?.toIntOrNull()
-                val item = viewModel.items.find { it.id == itemId }
-                item?.let {
-                    DetailItemScreen(it) { viewModel.toggleFavorite(it) }
+
+                // RUTA 4: DETALLE FAVORITOS (CON COMENTARIOS)
+                composable("favDetail/{itemName}") { backStackEntry ->
+                    val itemName = backStackEntry.arguments?.getString("itemName")
+                    val item = viewModel.items.find { it.title == itemName }
+                    if (item != null) {
+                        DetailFavScreen(item, viewModel.comments) { comment -> viewModel.addComment(comment) }
+                    }
                 }
+
+                // RUTA 5: PERFIL
+                composable("Profile") { ProfileScreen() }
+
+                // RUTA 6: ABOUT
+                composable("About") { LapanTalla() }
             }
-            composable("favs") {
-                FavListScreen(
-                    favs = viewModel.favorites.value,
-                    onRemove = { viewModel.toggleFavorite(it) },
-                    onItemClick = { navController.navigate("favDetail/${it.id}") }
-                )
-            }
-            composable("favDetail/{itemId}") { backStackEntry ->
-                val itemId = backStackEntry.arguments?.getString("itemId")?.toIntOrNull()
-                val item = viewModel.items.find { it.id == itemId }
-                item?.let {
-                    DetailFavScreen(it, viewModel.comments) { comment -> viewModel.addComment(comment) }
-                }
-            }
-            composable("profile") { ProfileScreen() }
-            composable("about") { LapanTalla() }
         }
+    }
+}
+
+// --- MENÚS DE NAVEGACIÓN ---
+
+@Composable
+fun NewsickBottomBar(navController: NavHostController) {
+    val navBackStackEntry by navController.currentBackStackEntryAsState()
+    val currentRoute = navBackStackEntry?.destination?.route
+
+    NavigationBar {
+        NavigationBarItem(
+            icon = { Icon(Icons.Default.Home, "Inicio") },
+            label = { Text("Inicio") },
+            selected = currentRoute == "ElementList",
+            onClick = { navController.navigate("ElementList") }
+        )
+        NavigationBarItem(
+            icon = { Icon(Icons.Default.Favorite, "Favoritos") },
+            label = { Text("Favoritos") },
+            selected = currentRoute == "FavList",
+            onClick = { navController.navigate("FavList") }
+        )
+        NavigationBarItem(
+            icon = { Icon(Icons.Default.Person, "Perfil") },
+            label = { Text("Perfil") },
+            selected = currentRoute == "Profile",
+            onClick = { navController.navigate("Profile") }
+        )
+        NavigationBarItem(
+            icon = { Icon(Icons.Default.Info, "Info") },
+            label = { Text("About") },
+            selected = currentRoute == "About",
+            onClick = { navController.navigate("About") }
+        )
+    }
+}
+
+@Composable
+fun NewsickNavRail(navController: NavHostController) {
+    val navBackStackEntry by navController.currentBackStackEntryAsState()
+    val currentRoute = navBackStackEntry?.destination?.route
+
+    NavigationRail {
+        NavigationRailItem(
+            icon = { Icon(Icons.Default.Home, "Inicio") },
+            label = { Text("Inicio") },
+            selected = currentRoute == "ElementList",
+            onClick = { navController.navigate("ElementList") }
+        )
+        Spacer(Modifier.height(8.dp))
+        NavigationRailItem(
+            icon = { Icon(Icons.Default.Favorite, "Favoritos") },
+            label = { Text("Favoritos") },
+            selected = currentRoute == "FavList",
+            onClick = { navController.navigate("FavList") }
+        )
+        Spacer(Modifier.height(8.dp))
+        NavigationRailItem(
+            icon = { Icon(Icons.Default.Person, "Perfil") },
+            label = { Text("Perfil") },
+            selected = currentRoute == "Profile",
+            onClick = { navController.navigate("Profile") }
+        )
+        Spacer(Modifier.height(8.dp))
+        NavigationRailItem(
+            icon = { Icon(Icons.Default.Info, "Info") },
+            label = { Text("About") },
+            selected = currentRoute == "About",
+            onClick = { navController.navigate("About") }
+        )
     }
 }
 
 // --- PANTALLAS (SCREENS) ---
 
-// 1. ElemListScreen
+// 1. ElemListScreen (CON BÚSQUEDA)
 @Composable
 fun ElemListScreen(
     items: List<MusicItem>,
+    searchQuery: String,
+    onSearchChange: (String) -> Unit,
     onItemClick: (MusicItem) -> Unit,
     onFavClick: (MusicItem) -> Unit
 ) {
-    LazyColumn(contentPadding = PaddingValues(16.dp)) {
-        item {
-            Text(
-                "Novedades",
-                style = MaterialTheme.typography.headlineLarge,
-                modifier = Modifier.padding(bottom = 16.dp),
-                color = MaterialTheme.colorScheme.primary
-            )
-        }
-        items(items) { item ->
-            MusicCard(
-                item = item,
-                onClick = { onItemClick(item) },
-                onFavClick = { onFavClick(item) }
-            )
-            Spacer(modifier = Modifier.height(8.dp))
+    Column(modifier = Modifier.fillMaxSize()) {
+        // ZONA DE BÚSQUEDA
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = onSearchChange,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            label = { Text("Buscar...") },
+            leadingIcon = { Icon(Icons.Default.Search, null) },
+            singleLine = true,
+            shape = RoundedCornerShape(12.dp)
+        )
+
+        LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)) {
+            item {
+                Text(
+                    "Catálogo Musical",
+                    style = MaterialTheme.typography.headlineMedium,
+                    modifier = Modifier.padding(bottom = 16.dp),
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            items(items) { item ->
+                MusicCard(
+                    item = item,
+                    onClick = { onItemClick(item) },
+                    onFavClick = { onFavClick(item) }
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+            }
         }
     }
 }
@@ -278,13 +402,15 @@ fun DetailItemScreen(item: MusicItem, onFavClick: () -> Unit) {
             Icon(Icons.Default.MusicNote, null, modifier = Modifier.size(80.dp), tint = Color.Gray)
         }
         Spacer(modifier = Modifier.height(16.dp))
-        GenreChip(genre = item.genre) // Componente personalizado 2
+        GenreChip(genre = item.genre)
         Spacer(modifier = Modifier.height(8.dp))
         Text(item.title, style = MaterialTheme.typography.headlineLarge)
         Text(item.artist, style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.secondary)
         Spacer(modifier = Modifier.height(16.dp))
         Text(item.description, style = MaterialTheme.typography.bodyLarge)
         Spacer(modifier = Modifier.height(24.dp))
+
+        // BOTÓN FAVORITO CON CAMBIO DE ESTADO
         Button(
             onClick = onFavClick,
             colors = ButtonDefaults.buttonColors(
@@ -293,17 +419,42 @@ fun DetailItemScreen(item: MusicItem, onFavClick: () -> Unit) {
         ) {
             Icon(if (item.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder, null)
             Spacer(Modifier.width(8.dp))
-            Text(if (item.isFavorite) "Quitar de Favoritos" else "Añadir a Favoritos")
+            Text(if (item.isFavorite) "Añadido a Favoritos" else "Añadir a Favoritos")
         }
     }
 }
 
-// 3. FavListScreen
+// 3. FavListScreen (CON DIALOGO DE BORRADO)
 @Composable
 fun FavListScreen(favs: List<MusicItem>, onRemove: (MusicItem) -> Unit, onItemClick: (MusicItem) -> Unit) {
+    // Estado para controlar el diálogo
+    var itemToDelete by remember { mutableStateOf<MusicItem?>(null) }
+
+    if (itemToDelete != null) {
+        AlertDialog(
+            onDismissRequest = { itemToDelete = null },
+            title = { Text("Eliminar Favorito") },
+            text = { Text("¿Estás seguro de que deseas eliminar '${itemToDelete?.title}' de favoritos?") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        itemToDelete?.let { onRemove(it) }
+                        itemToDelete = null
+                    }
+                ) { Text("Eliminar", color = CustomAlert) }
+            },
+            dismissButton = {
+                TextButton(onClick = { itemToDelete = null }) { Text("Cancelar") }
+            }
+        )
+    }
+
     LazyColumn(contentPadding = PaddingValues(16.dp)) {
         item {
             Text("Tu Colección", style = MaterialTheme.typography.headlineLarge, color = CustomGold)
+        }
+        if (favs.isEmpty()) {
+            item { Text("No tienes favoritos aún.", modifier = Modifier.padding(top = 16.dp)) }
         }
         items(favs) { item ->
             Row(
@@ -311,7 +462,7 @@ fun FavListScreen(favs: List<MusicItem>, onRemove: (MusicItem) -> Unit, onItemCl
                     .fillMaxWidth()
                     .padding(vertical = 8.dp)
                     .clickable { onItemClick(item) }
-                    .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(8.dp))
                     .padding(16.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
@@ -320,7 +471,7 @@ fun FavListScreen(favs: List<MusicItem>, onRemove: (MusicItem) -> Unit, onItemCl
                     Text(item.title, style = MaterialTheme.typography.titleMedium)
                     Text(item.artist, style = MaterialTheme.typography.bodyMedium)
                 }
-                IconButton(onClick = { onRemove(item) }) {
+                IconButton(onClick = { itemToDelete = item }) { // Dispara el Dialog
                     Icon(Icons.Default.Delete, contentDescription = "Eliminar", tint = CustomAlert)
                 }
             }
@@ -328,7 +479,7 @@ fun FavListScreen(favs: List<MusicItem>, onRemove: (MusicItem) -> Unit, onItemCl
     }
 }
 
-// 4. DetailFavScreen (Comentarios + FAB)
+// 4. DetailFavScreen
 @Composable
 fun DetailFavScreen(item: MusicItem, comments: List<Comment>, onAddComment: (String) -> Unit) {
     var showDialog by remember { mutableStateOf(false) }
@@ -346,7 +497,7 @@ fun DetailFavScreen(item: MusicItem, comments: List<Comment>, onAddComment: (Str
     ) { padding ->
         Column(modifier = Modifier.padding(padding).padding(16.dp)) {
             Text("Debate sobre: ${item.title}", style = MaterialTheme.typography.headlineMedium)
-            Divider(color = MaterialTheme.colorScheme.primary, thickness = 2.dp, modifier = Modifier.padding(vertical = 8.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.primary, thickness = 2.dp, modifier = Modifier.padding(vertical = 8.dp))
             LazyColumn {
                 items(comments) { comment ->
                     Card(
@@ -367,19 +518,21 @@ fun DetailFavScreen(item: MusicItem, comments: List<Comment>, onAddComment: (Str
         AlertDialog(
             onDismissRequest = { showDialog = false },
             title = { Text("Nuevo Comentario") },
-            text = { TextField(value = newCommentText, onValueChange = { newCommentText = it }) },
+            text = { TextField(value = newCommentText, onValueChange = { newCommentText = it }, label = { Text("Tu opinión") }) },
             confirmButton = {
                 Button(onClick = {
-                    onAddComment(newCommentText)
-                    newCommentText = ""
-                    showDialog = false
+                    if(newCommentText.isNotEmpty()) {
+                        onAddComment(newCommentText)
+                        newCommentText = ""
+                        showDialog = false
+                    }
                 }) { Text("Publicar") }
             }
         )
     }
 }
 
-// 5. ProfileScreen
+// 5. ProfileScreen (LOGIN/LOGOUT)
 @Composable
 fun ProfileScreen() {
     var isLoggedIn by remember { mutableStateOf(false) }
@@ -395,115 +548,19 @@ fun ProfileScreen() {
             Text("Nivel: Melómano Experto", color = CustomGold)
             Spacer(Modifier.height(32.dp))
             Button(onClick = { isLoggedIn = false }, colors = ButtonDefaults.buttonColors(containerColor = CustomAlert)) {
-                Text("Cerrar Sesión")
+                Text("Cerrar Sesión") // Texto cambia
             }
         } else {
             Text("Bienvenido, Invitado", style = MaterialTheme.typography.headlineMedium)
             Spacer(Modifier.height(32.dp))
             Button(onClick = { isLoggedIn = true }) {
-                Text("Iniciar Sesión")
+                Text("Iniciar Sesión") // Texto cambia
             }
         }
     }
 }
 
-// 6. AboutScreen (LapanTalla) - Tal cual estaba, solo aseguramos que use el tema
-
-
-// --- COMPONENTES PERSONALIZADOS ---
-
-/**
- * COMPONENTE 1: MusicCard
- * Tarjeta personalizada con borde neón y estilo específico.
- */
-@Composable
-fun MusicCard(item: MusicItem, onClick: () -> Unit, onFavClick: () -> Unit) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onClick() },
-        // Borde verde neón si es favorito, gris si no
-        border = BorderStroke(1.dp, if (item.isFavorite) CustomGold else MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-    ) {
-        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                modifier = Modifier
-                    .size(50.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.secondary),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(item.title.first().toString(), color = Color.White, fontWeight = FontWeight.Bold)
-            }
-            Spacer(modifier = Modifier.width(16.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(item.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Text(item.artist, style = MaterialTheme.typography.bodyMedium)
-            }
-            IconButton(onClick = onFavClick) {
-                Icon(
-                    imageVector = if (item.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                    contentDescription = "Fav",
-                    tint = if (item.isFavorite) CustomGold else MaterialTheme.colorScheme.onSurface
-                )
-            }
-        }
-    }
-}
-
-/**
- * COMPONENTE 2: GenreChip
- * Chip personalizado para mostrar categorías.
- */
-@Composable
-fun GenreChip(genre: String) {
-    Surface(
-        color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.2f),
-        shape = RoundedCornerShape(50),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary)
-    ) {
-        Text(
-            text = genre.uppercase(),
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.secondary
-        )
-    }
-}
-
-// --- LOGICA PANTALLA DIVIDIDA (Expandido/Medio) ---
-@Composable
-fun SplitScreen(viewModel: MainViewModel) {
-    var selectedItem by remember { mutableStateOf<MusicItem?>(null) }
-
-    Row(modifier = Modifier.fillMaxSize()) {
-        // Panel Izquierdo (Lista) - 40% del ancho
-        Box(modifier = Modifier.weight(0.4f).fillMaxHeight()) {
-            ElemListScreen(
-                items = viewModel.items,
-                onItemClick = { selectedItem = it },
-                onFavClick = { viewModel.toggleFavorite(it) }
-            )
-        }
-
-        // Separador visual vertical (Este es el que dibuja la línea gris)
-        Spacer(modifier = Modifier.width(1.dp).fillMaxHeight().background(Color.Gray))
-
-        // Panel Derecho (Detalle) - 60% del ancho
-        Box(modifier = Modifier.weight(0.6f).fillMaxHeight()) {
-            if (selectedItem != null) {
-                DetailItemScreen(item = selectedItem!!) {
-                    viewModel.toggleFavorite(selectedItem!!)
-                }
-            } else {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("Selecciona un elemento de la lista", style = MaterialTheme.typography.headlineSmall, color = Color.Gray)
-                }
-            }
-        }
-    }
-}
+// 6. AboutScreen (LapanTalla)
 @Composable
 fun LapanTalla(modifier: Modifier = Modifier) {
     val appName = "Newsick"
@@ -583,6 +640,94 @@ fun LapanTalla(modifier: Modifier = Modifier) {
             text = appVersion,
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+// --- LOGICA PANTALLA DIVIDIDA (Expandido) ---
+@Composable
+fun SplitScreen(viewModel: MainViewModel) {
+    // Estado local para saber qué item se muestra en el panel derecho
+    var selectedItem by remember { mutableStateOf<MusicItem?>(null) }
+
+    Row(modifier = Modifier.fillMaxSize()) {
+        // Panel Izquierdo (Lista) - 40% del ancho
+        Box(modifier = Modifier.weight(0.4f).fillMaxHeight()) {
+            ElemListScreen(
+                items = viewModel.filteredItems, // Usa la lista filtrada
+                searchQuery = viewModel.searchQuery,
+                onSearchChange = { viewModel.updateSearch(it) },
+                onItemClick = { selectedItem = it }, // En expandido, no navega, solo selecciona
+                onFavClick = { viewModel.toggleFavorite(it) }
+            )
+        }
+
+        // Separador vertical
+        Spacer(modifier = Modifier.width(1.dp).fillMaxHeight().background(Color.Gray))
+
+        // Panel Derecho (Detalle) - 60% del ancho
+        Box(modifier = Modifier.weight(0.6f).fillMaxHeight()) {
+            if (selectedItem != null) {
+                DetailItemScreen(item = selectedItem!!) {
+                    viewModel.toggleFavorite(selectedItem!!)
+                }
+            } else {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("Selecciona un elemento de la lista", style = MaterialTheme.typography.headlineSmall, color = Color.Gray)
+                }
+            }
+        }
+    }
+}
+
+// --- COMPONENTES UI AUXILIARES ---
+@Composable
+fun MusicCard(item: MusicItem, onClick: () -> Unit, onFavClick: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() },
+        border = BorderStroke(1.dp, if (item.isFavorite) CustomGold else MaterialTheme.colorScheme.outlineVariant),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(50.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.secondary),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(item.title.first().toString(), color = Color.White, fontWeight = FontWeight.Bold)
+            }
+            Spacer(modifier = Modifier.width(16.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(item.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(item.artist, style = MaterialTheme.typography.bodyMedium)
+            }
+            IconButton(onClick = onFavClick) {
+                Icon(
+                    imageVector = if (item.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder, // Cambio de Icono
+                    contentDescription = "Fav",
+                    tint = if (item.isFavorite) CustomGold else MaterialTheme.colorScheme.onSurface
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun GenreChip(genre: String) {
+    Surface(
+        color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.2f),
+        shape = RoundedCornerShape(50),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary)
+    ) {
+        Text(
+            text = genre.uppercase(),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.secondary
         )
     }
 }
