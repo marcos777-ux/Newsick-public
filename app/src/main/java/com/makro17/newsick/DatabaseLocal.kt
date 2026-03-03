@@ -4,40 +4,56 @@ import android.content.Context
 import androidx.room.*
 import kotlinx.coroutines.flow.Flow
 
-// ============================================================
-// 1. ENTIDADES (Tablas de la BD)
-// ============================================================
+// ══════════════════════════════════════════════════════════
+// 1. ENTIDADES
+// ══════════════════════════════════════════════════════════
 
 @Entity(tableName = "users")
 data class UserEntity(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
-    @ColumnInfo(name = "email") val email: String,
-    @ColumnInfo(name = "password") val password: String,   // En prod: guardar hash, no texto plano
+    @ColumnInfo(name = "email")    val email: String,
+    @ColumnInfo(name = "password") val password: String,
     @ColumnInfo(name = "username") val username: String,
-    @ColumnInfo(name = "bio") val bio: String = "Sin bio todavía.",
-    @ColumnInfo(name = "token") val token: String = ""
+    @ColumnInfo(name = "bio")      val bio: String = "",
+    @ColumnInfo(name = "token")    val token: String = ""
 )
 
 @Entity(tableName = "friend_collections")
 data class FriendCollectionEntity(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
-    @ColumnInfo(name = "song_title") val songTitle: String,
-    // Los nombres se guardan como "Ana,Pedro,Tú" y se parsean al leer
+    @ColumnInfo(name = "song_title")   val songTitle: String,
     @ColumnInfo(name = "friend_names") val friendNames: String
 )
 
-// ============================================================
-// 2. DAOs (Acceso a datos)
-// ============================================================
+@Entity(tableName = "song_posts")
+data class SongPostEntity(
+    @PrimaryKey
+    @ColumnInfo(name = "track_id")      val trackId: String,   // ← nombre explícito
+    @ColumnInfo(name = "track_name")    val trackName: String,
+    @ColumnInfo(name = "artist_name")   val artistName: String,
+    @ColumnInfo(name = "artwork_url")   val artworkUrl: String,
+    @ColumnInfo(name = "timestamp")     val timestamp: Long = System.currentTimeMillis()
+)
+
+@Entity(tableName = "post_photos")
+data class PostPhotoEntity(
+    @PrimaryKey(autoGenerate = true)   val id: Int = 0,
+    @ColumnInfo(name = "track_id")     val trackId: String,
+    @ColumnInfo(name = "photo_uri")    val photoUri: String,
+    @ColumnInfo(name = "user_id")      val userId: Int,
+    @ColumnInfo(name = "username")     val username: String,
+    @ColumnInfo(name = "timestamp")    val timestamp: Long = System.currentTimeMillis()
+)
+
+// ══════════════════════════════════════════════════════════
+// 2. DAOs
+// ══════════════════════════════════════════════════════════
 
 @Dao
 interface UserDao {
-
-    // Devuelve null si no existe → Login fallido
     @Query("SELECT * FROM users WHERE email = :email AND password = :password LIMIT 1")
     suspend fun login(email: String, password: String): UserEntity?
 
-    // Devuelve null si el email ya existe
     @Query("SELECT * FROM users WHERE email = :email LIMIT 1")
     suspend fun findByEmail(email: String): UserEntity?
 
@@ -45,113 +61,148 @@ interface UserDao {
     suspend fun insert(user: UserEntity): Long
 
     @Update
-    suspend fun update(user: UserEntity): Int
+    suspend fun update(user: UserEntity)
 
     @Query("SELECT * FROM users WHERE id = :id LIMIT 1")
     suspend fun getById(id: Int): UserEntity?
+
+    // NUEVO: Búsqueda de usuarios por nombre
+    @Query("SELECT * FROM users WHERE username LIKE '%' || :query || '%' LIMIT 10")
+    suspend fun searchUsers(query: String): List<UserEntity>
 }
 
 @Dao
 interface FriendCollectionDao {
-
     @Query("SELECT * FROM friend_collections ORDER BY id DESC")
-    fun getAll(): Flow<List<FriendCollectionEntity>>   // Flow → se actualiza automáticamente en la UI
+    fun getAll(): Flow<List<FriendCollectionEntity>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(collection: FriendCollectionEntity): Long
-
-    @Delete
-    suspend fun delete(collection: FriendCollectionEntity)
 
     @Query("DELETE FROM friend_collections WHERE id = :id")
     suspend fun deleteById(id: Int)
 }
 
-// ============================================================
-// 3. BASE DE DATOS ROOM
-// ============================================================
+@Dao
+interface SongPostDao {
+    // JOIN en lugar de subquery — Room valida mejor las referencias entre tablas
+    @Query("SELECT DISTINCT sp.* FROM song_posts sp INNER JOIN post_photos pp ON sp.track_id = pp.track_id ORDER BY sp.timestamp DESC")
+    fun getActiveSongs(): Flow<List<SongPostEntity>>
+
+    @Query("SELECT DISTINCT sp.* FROM song_posts sp INNER JOIN post_photos pp ON sp.track_id = pp.track_id WHERE pp.user_id = :userId ORDER BY sp.timestamp DESC")
+    fun getActiveSongsByUser(userId: Int): Flow<List<SongPostEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertOrIgnore(post: SongPostEntity): Long
+
+    @Query("SELECT * FROM song_posts WHERE track_id = :trackId LIMIT 1")
+    suspend fun getByTrackId(trackId: String): SongPostEntity?
+}
+
+@Dao
+interface PostPhotoDao {
+    @Query("SELECT * FROM post_photos WHERE track_id = :trackId ORDER BY timestamp DESC")
+    fun getPhotosForSong(trackId: String): Flow<List<PostPhotoEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(photo: PostPhotoEntity): Long
+
+    @Query("DELETE FROM post_photos WHERE id = :id")
+    suspend fun deleteById(id: Int)
+}
+
+// ══════════════════════════════════════════════════════════
+// 3. BASE DE DATOS (versión 2)
+// ══════════════════════════════════════════════════════════
 
 @Database(
-    entities = [UserEntity::class, FriendCollectionEntity::class],
-    version = 1,
+    entities = [
+        UserEntity::class,
+        FriendCollectionEntity::class,
+        SongPostEntity::class,
+        PostPhotoEntity::class
+    ],
+    version = 2,
     exportSchema = false
 )
 abstract class NewsickDatabase : RoomDatabase() {
     abstract fun userDao(): UserDao
     abstract fun friendCollectionDao(): FriendCollectionDao
+    abstract fun songPostDao(): SongPostDao
+    abstract fun postPhotoDao(): PostPhotoDao
 
     companion object {
-        @Volatile
-        private var INSTANCE: NewsickDatabase? = null
+        @Volatile private var INSTANCE: NewsickDatabase? = null
 
-        fun getDatabase(context: Context): NewsickDatabase {
-            return INSTANCE ?: synchronized(this) {
-                val instance = Room.databaseBuilder(
+        fun getDatabase(context: Context): NewsickDatabase =
+            INSTANCE ?: synchronized(this) {
+                Room.databaseBuilder(
                     context.applicationContext,
                     NewsickDatabase::class.java,
                     "newsick_database"
                 )
-                    // Si cambias el esquema sube la versión y añade una Migration.
-                    // Para desarrollo rápido puedes usar .fallbackToDestructiveMigration()
                     .fallbackToDestructiveMigration()
                     .build()
-                INSTANCE = instance
-                instance
+                    .also { INSTANCE = it }
             }
-        }
     }
 }
 
-// ============================================================
-// 4. REPOSITORIO (Capa intermedia ViewModel ↔ BD)
-// ============================================================
+// ══════════════════════════════════════════════════════════
+// 4. REPOSITORIO
+// ══════════════════════════════════════════════════════════
 
 class NewsickRepository(private val db: NewsickDatabase) {
 
-    // --- AUTH ---
+    suspend fun login(email: String, password: String) = db.userDao().login(email, password)
 
-    /** Devuelve el UserEntity si las credenciales son correctas, null si no. */
-    suspend fun login(email: String, password: String): UserEntity? {
-        return db.userDao().login(email, password)
-    }
-
-    /**
-     * Registra un nuevo usuario.
-     * @return UserEntity recién creado, o null si el email ya existe.
-     */
     suspend fun register(email: String, password: String, username: String): UserEntity? {
-        val existing = db.userDao().findByEmail(email)
-        if (existing != null) return null   // Email duplicado
-
-        val newUser = UserEntity(
-            email = email,
-            password = password,    // ⚠️ En producción: hash con BCrypt / Argon2
-            username = username
+        if (db.userDao().findByEmail(email) != null) return null
+        val id = db.userDao().insert(
+            UserEntity(email = email, password = password, username = username)
         )
-        val insertedId = db.userDao().insert(newUser)
-        return db.userDao().getById(insertedId.toInt())
+        return db.userDao().getById(id.toInt())
     }
 
-    // --- COLECCIONES ---
-
-    /** Flow que emite la lista actualizada cada vez que cambia la BD */
-    fun getCollections(): Flow<List<FriendCollectionEntity>> =
-        db.friendCollectionDao().getAll()
+    fun getCollections() = db.friendCollectionDao().getAll()
 
     suspend fun addCollection(songTitle: String, friends: List<String>) {
         db.friendCollectionDao().insert(
-            FriendCollectionEntity(
-                songTitle = songTitle,
-                friendNames = friends.joinToString(",")
-            )
+            FriendCollectionEntity(songTitle = songTitle, friendNames = friends.joinToString(","))
         )
     }
 
-    suspend fun removeCollection(id: Int) {
-        db.friendCollectionDao().deleteById(id)
+    suspend fun removeCollection(id: Int) = db.friendCollectionDao().deleteById(id)
+
+    fun parseNames(raw: String) = raw.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+
+    fun getActiveSongs() = db.songPostDao().getActiveSongs()
+
+    fun getActiveSongsByUser(userId: Int) = db.songPostDao().getActiveSongsByUser(userId)
+
+    fun getPhotosForSong(trackId: String) = db.postPhotoDao().getPhotosForSong(trackId)
+
+    suspend fun getSongPost(trackId: String) = db.songPostDao().getByTrackId(trackId)
+
+    suspend fun createPost(
+        trackId: String,
+        trackName: String,
+        artistName: String,
+        artworkUrl: String,
+        photoUris: List<String>,
+        userId: Int,
+        username: String
+    ) {
+        db.songPostDao().insertOrIgnore(
+            SongPostEntity(trackId = trackId, trackName = trackName, artistName = artistName, artworkUrl = artworkUrl)
+        )
+        photoUris.forEach { uri ->
+            db.postPhotoDao().insert(
+                PostPhotoEntity(trackId = trackId, photoUri = uri, userId = userId, username = username)
+            )
+        }
     }
 
-    // Helper: convierte el String "Ana,Pedro" en List<String>
-    fun parseNames(raw: String): List<String> =
-        raw.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+    // NUEVO: Búsqueda de usuarios
+    suspend fun searchUsers(query: String) = db.userDao().searchUsers(query)
 }

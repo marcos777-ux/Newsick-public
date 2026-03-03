@@ -2,7 +2,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
-    id("com.google.devtools.ksp") version "2.3.5"            // ← KSP independiente de Kotlin
+    id("com.google.devtools.ksp") version "2.3.5"
 }
 
 android {
@@ -14,8 +14,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = 1
-        versionName = "2.4"
-
+        versionName = "2.6"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -37,7 +36,7 @@ android {
     }
     buildFeatures {
         compose = true
-        buildConfig = true   // ← necesario para BuildConfig.VERSION_NAME
+        buildConfig = true
     }
 }
 
@@ -66,7 +65,17 @@ dependencies {
     implementation(libs.androidx.icons.extended)
     implementation(libs.retrofit.core)
     implementation(libs.retrofit.gson)
+
+    // Room
     implementation("androidx.room:room-runtime:$roomVersion")
     implementation("androidx.room:room-ktx:$roomVersion")
-    ksp("androidx.room:room-compiler:$roomVersion")             // ← CAMBIADO: kapt → ksp
+    ksp("androidx.room:room-compiler:$roomVersion")
+
+    // Google Maps + Location
+    implementation("com.google.maps.android:maps-compose:4.3.3")
+    implementation("com.google.android.gms:play-services-maps:19.0.0")
+    implementation("com.google.android.gms:play-services-location:21.3.0")
+
+    // Coil (carga de imagenes en Compose)
+    implementation("io.coil-kt:coil-compose:2.6.0")
 }
