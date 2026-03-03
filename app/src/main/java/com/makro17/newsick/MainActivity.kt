@@ -1,5 +1,6 @@
 package com.makro17.newsick
 
+import android.app.Application
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
@@ -29,12 +30,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.ExitToApp
@@ -78,62 +77,27 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.lifecycle.AndroidViewModel  // ← CAMBIADO: era ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
-import com.makro17.newsick.ui.theme.CustomGold
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import retrofit2.Retrofit
-import retrofit2.converter.gson.GsonConverterFactory
-import retrofit2.http.Body
-import retrofit2.http.POST
 
-// --- 1. CAPA DE RED (NETWORKING) ---
-// Define cómo son los datos que envías y recibes del servidor
-// El username es opcional (?) porque en el Login no lo enviamos, solo en el Registro
-data class AuthRequest(
-    val email: String,
-    val password: String,
-    val username: String? = null
-)
-data class AuthResponse(val success: Boolean, val token: String?, val message: String?)
-
-// Interfaz para comunicarse con TU servidor
-interface ApiService {
-    // Estas rutas deben existir en tu servidor backend
-    @POST("/api/login.php")
-    suspend fun login(@Body request: AuthRequest): AuthResponse
-
-    @POST("/api/register.php")
-    suspend fun register(@Body request: AuthRequest): AuthResponse
-}
-
-// Objeto Singleton para crear la conexión
-object RetrofitInstance {
-    private const val BASE_URL = "https://jumiquihe68.s3.tnas2.link:477/"
-
-    val api: ApiService by lazy {
-        Retrofit.Builder()
-            .baseUrl(BASE_URL)
-            .addConverterFactory(GsonConverterFactory.create())
-            .build()
-            .create(ApiService::class.java)
-    }
-}
-
-// --- 2. MODELOS DE DATOS DE LA APP ---
+// ─────────────────────────────────────────────────────────────
+// MODELOS DE DATOS (sin cambios)
+// ─────────────────────────────────────────────────────────────
 data class MusicItem(
     val id: Int,
     val title: String,
@@ -146,125 +110,139 @@ data class MusicItem(
 data class UserPost(val id: Int, val userName: String, val imageUrl: String, val comment: String)
 data class FriendCollection(val id: Int, val songTitle: String, val friendNames: List<String>)
 
-// --- 3. VIEWMODEL ---
-class MainViewModel : androidx.lifecycle.ViewModel() {
+// ─────────────────────────────────────────────────────────────
+// VIEWMODEL — ahora usa AndroidViewModel + Room
+// ─────────────────────────────────────────────────────────────
+class MainViewModel(application: Application) : AndroidViewModel(application) {
+
+    // BD y repositorio
+    private val db = NewsickDatabase.getDatabase(application)
+    private val repo = NewsickRepository(db)
 
     // Estado de carga inicial
     private val _isLoading = MutableStateFlow(true)
     val isLoading = _isLoading.asStateFlow()
 
     // --- ESTADO DE AUTENTICACIÓN ---
-    var isLoggedIn = mutableStateOf(false) // ¿El usuario entró?
-    var authError = mutableStateOf<String?>(null) // Errores de login
-    var isRegistering = mutableStateOf(false) // ¿Está en pantalla de registro?
-    // Estado para las barras de búsqueda (App Principal)
-    var userSearchQuery = mutableStateOf("")
-    var mapSearchQuery = mutableStateOf("")
+    var isLoggedIn = mutableStateOf(false)
+    var authError = mutableStateOf<String?>(null)
+    var isRegistering = mutableStateOf(false)
     var needsUsername = mutableStateOf(false)
 
-    // Datos simulados (Se cargarían tras el login)
+    // Campos temporales para el flujo de registro de 2 pasos
+    private var pendingEmail = ""
+    private var pendingPassword = ""
+
+    // Usuario activo (se rellena tras login o registro)
+    var loggedUsername = mutableStateOf("")
+    var loggedBio      = mutableStateOf("")
+
+    // Búsquedas
+    var userSearchQuery = mutableStateOf("")
+    var mapSearchQuery = mutableStateOf("")
+
+    // Canciones simuladas (no persisten en BD, son de exploración)
     val items = mutableStateListOf(
-        MusicItem(1, "Neon Nights", "CyberPunks", "Synthwave", "Electronic"),
-        MusicItem(2, "Jazz Café", "Blue Note", "Jazz", "Jazz"),
-        MusicItem(3, "Heavy Code", "Compilers", "Metal", "Metal"),
-        MusicItem(4, "Lo-Fi Study", "Chill Hop", "Beats", "Lo-Fi"),
-        MusicItem(5, "Summer Vibes", "Sun", "Pop", "Pop"),
-        MusicItem(6, "Night Drive", "Kavinsky", "Synth", "Electronic")
+        MusicItem(1, "Neon Nights",  "CyberPunks", "Synthwave", "Electronic"),
+        MusicItem(2, "Jazz Café",    "Blue Note",  "Jazz",      "Jazz"),
+        MusicItem(3, "Heavy Code",   "Compilers",  "Metal",     "Metal"),
+        MusicItem(4, "Lo-Fi Study",  "Chill Hop",  "Beats",     "Lo-Fi"),
+        MusicItem(5, "Summer Vibes", "Sun",        "Pop",       "Pop"),
+        MusicItem(6, "Night Drive",  "Kavinsky",   "Synth",     "Electronic")
     )
 
-    val friendCollections = mutableStateListOf(
-        FriendCollection(1, "Neon Nights", listOf("Ana", "Pedro", "Tú")),
-        FriendCollection(2, "Despacito", listOf("Luis", "Tú"))
-    )
+    // Colecciones desde Room — se actualiza sola cuando cambia la BD
+    val friendCollections = repo.getCollections()
+        .map { list ->
+            list.map { entity ->
+                FriendCollection(
+                    id = entity.id,
+                    songTitle = entity.songTitle,
+                    friendNames = repo.parseNames(entity.friendNames)
+                )
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     init {
         viewModelScope.launch {
             delay(1000)
             _isLoading.value = false
-            // Aquí podrías comprobar si ya existe un token guardado en DataStore
-            // para poner isLoggedIn.value = true automáticamente.
         }
     }
 
-    // --- LÓGICA DE LOGIN / REGISTRO ---
-    // LOGIN: Enviamos email y pass (username se queda como null)
+    // ── LOGIN ──────────────────────────────────────────────
     fun performLogin(email: String, pass: String) {
         viewModelScope.launch {
             _isLoading.value = true
             authError.value = null
-            try {
-                // --- CÓDIGO REAL ACTIVADO ---
-                // Nota: Asegúrate de usar Dispatchers.IO para red
-                val response = withContext(Dispatchers.IO) {
-                    RetrofitInstance.api.login(AuthRequest(email = email, password = pass))
-                }
-
-                if (response.success) {
-                    isLoggedIn.value = true
-                    // Opcional: Guardar response.token en DataStore/SharedPreferences aquí
-                } else {
-                    authError.value = response.message ?: "Error al iniciar sesión"
-                }
-            } catch (e: Exception) {
-                // Útil para debugging: imprime el error en Logcat
-                e.printStackTrace()
-                authError.value = "Error de conexión: ${e.message}"
-            } finally {
-                _isLoading.value = false
+            val user = repo.login(email, pass)
+            if (user != null) {
+                loggedUsername.value = user.username
+                loggedBio.value      = user.bio
+                isLoggedIn.value = true
+            } else {
+                authError.value = "Correo o contraseña incorrectos"
             }
+            _isLoading.value = false
         }
     }
 
-    // Haz lo mismo para performRegister...
+    // ── REGISTRO — Paso 1: guardar email+pass temporalmente ──
+    fun prepareRegister(email: String, pass: String) {
+        pendingEmail = email
+        pendingPassword = pass
+        needsUsername.value = true
+    }
 
+    // ── REGISTRO — Paso 2: escribir en BD con username ───────
     fun performRegister(email: String, pass: String, username: String) {
         viewModelScope.launch {
-            // 1. Activar estado de carga (muestra el círculo giratorio)
             _isLoading.value = true
             authError.value = null
-
-            try {
-                // 2. Llamada real a la red (IO Thread)
-                // Usamos withContext(Dispatchers.IO) para mover esto fuera del hilo principal
-                val response = withContext(Dispatchers.IO) {
-                    RetrofitInstance.api.register(AuthRequest(email, pass, username))
-                }
-
-                // 3. Verificar respuesta del servidor
-                if (response.success) {
-                    // ÉXITO: El servidor creó el usuario
-                    println("Registro exitoso. Token: ${response.token}")
-
-                    // Aquí podrías guardar el token en DataStore si quisieras persistencia
-                    // Por ahora, solo dejamos pasar al usuario:
-                    isLoggedIn.value = true
-                } else {
-                    // ERROR DEL SERVIDOR (ej: "Usuario ya existe")
-                    authError.value = response.message ?: "Error desconocido al registrar"
-                }
-
-            } catch (e: Exception) {
-                // 4. ERROR DE CONEXIÓN (ej: Servidor apagado, sin internet, timeout)
-                e.printStackTrace() // Ver error exacto en Logcat
-                authError.value = "Error de conexión: ${e.localizedMessage}"
-            } finally {
-                // 5. Desactivar estado de carga siempre (haya éxito o error)
-                _isLoading.value = false
+            // Usamos los valores pendientes si email/pass llegan vacíos (compatibilidad con AuthScreen)
+            val finalEmail = email.ifBlank { pendingEmail }
+            val finalPass  = pass.ifBlank  { pendingPassword }
+            val user = repo.register(finalEmail, finalPass, username)
+            if (user != null) {
+                loggedUsername.value = user.username
+                loggedBio.value      = user.bio
+                isLoggedIn.value = true
+            } else {
+                authError.value = "Este correo ya está registrado"
             }
+            _isLoading.value = false
         }
     }
 
+    // ── LOGOUT ────────────────────────────────────────────
     fun logout() {
         isLoggedIn.value = false
-        // Aquí borrarías el token guardado
+        isRegistering.value = false
+        needsUsername.value = false
+        loggedUsername.value = ""
+        loggedBio.value = ""
+        pendingEmail = ""
+        pendingPassword = ""
     }
 
+    // ── COLECCIONES ───────────────────────────────────────
     fun addFriendCollection() {
-        friendCollections.add(FriendCollection(3, "New Jam", listOf("Tú", "Nuevo Amigo")))
+        viewModelScope.launch {
+            repo.addCollection("New Jam", listOf("Tú", "Nuevo Amigo"))
+        }
+    }
+
+    fun removeCollection(id: Int) {
+        viewModelScope.launch {
+            repo.removeCollection(id)
+        }
     }
 }
 
-// --- 4. ACTIVIDAD PRINCIPAL ---
+// ─────────────────────────────────────────────────────────────
+// ACTIVIDAD PRINCIPAL (sin cambios relevantes)
+// ─────────────────────────────────────────────────────────────
 class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels()
 
@@ -280,8 +258,6 @@ class MainActivity : ComponentActivity() {
                 colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()
             ) {
                 val windowSize = calculateWindowSizeClass(this)
-
-                // DECISIÓN DE FLUJO: ¿Login o App Principal?
                 if (viewModel.isLoggedIn.value) {
                     NewsickApp(windowSize.widthSizeClass, viewModel)
                 } else {
@@ -292,55 +268,44 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// --- 5. PANTALLA DE AUTENTICACIÓN (NUEVA) ---
+// ─────────────────────────────────────────────────────────────
+// PANTALLA DE AUTENTICACIÓN
+// ─────────────────────────────────────────────────────────────
 @Composable
 fun AuthScreen(viewModel: MainViewModel) {
-    // Estados locales para los campos de texto
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var chosenUsername by remember { mutableStateOf("") }
 
-    // Estados observados desde el ViewModel
     val isRegistering = viewModel.isRegistering.value
-    val needsUsername = viewModel.needsUsername.value // Debes añadir este booleano en tu ViewModel
+    val needsUsername = viewModel.needsUsername.value
     val isLoading = viewModel.isLoading.collectAsState().value
     val authError = viewModel.authError.value
 
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center
-    ) {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(
-            modifier = Modifier
-                .padding(32.dp)
-                .fillMaxWidth(),
+            modifier = Modifier.padding(32.dp).fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            // Icono dinámico según el paso
             Icon(
                 imageVector = if (needsUsername) Icons.Default.AccountCircle else Icons.Default.MusicNote,
                 contentDescription = null,
                 modifier = Modifier.size(80.dp),
                 tint = MaterialTheme.colorScheme.primary
             )
-
             Spacer(modifier = Modifier.height(16.dp))
-
-            // Título dinámico
             Text(
                 text = when {
                     needsUsername -> "Configura tu perfil"
                     isRegistering -> "Crea tu cuenta"
-                    else -> "Bienvenido a Newsick"
+                    else          -> "Bienvenido a Newsick"
                 },
                 style = MaterialTheme.typography.headlineMedium
             )
-
             Spacer(modifier = Modifier.height(32.dp))
 
             if (!needsUsername) {
-                // --- PASO 1: LOGIN O REGISTRO INICIAL ---
                 OutlinedTextField(
                     value = email,
                     onValueChange = { email = it },
@@ -349,9 +314,7 @@ fun AuthScreen(viewModel: MainViewModel) {
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email)
                 )
-
                 Spacer(modifier = Modifier.height(8.dp))
-
                 OutlinedTextField(
                     value = password,
                     onValueChange = { password = it },
@@ -362,14 +325,12 @@ fun AuthScreen(viewModel: MainViewModel) {
                     singleLine = true
                 )
             } else {
-                // --- PASO 2: NOMBRE DE USUARIO OBLIGATORIO (Solo tras registro) ---
                 Text(
                     text = "Por favor, elige un nombre de usuario para continuar. Este nombre será público.",
                     style = MaterialTheme.typography.bodyMedium,
                     textAlign = TextAlign.Center,
                     modifier = Modifier.padding(bottom = 16.dp)
                 )
-
                 OutlinedTextField(
                     value = chosenUsername,
                     onValueChange = { chosenUsername = it },
@@ -380,30 +341,31 @@ fun AuthScreen(viewModel: MainViewModel) {
                 )
             }
 
-            // Mensaje de error
-            authError?.let { error ->
+            authError?.let {
                 Spacer(modifier = Modifier.height(8.dp))
-                Text(text = error, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
+                Text(text = it, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
             }
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            // Botón de acción principal
             Button(
                 onClick = {
-                    if (needsUsername) {
-                        // Finalizar registro con el nombre de usuario
-                        viewModel.performRegister(email, password, chosenUsername)
-                    } else if (isRegistering) {
-                        // Validar correo/pass y pasar al siguiente paso
-                        if (email.contains("@") && password.length >= 6) {
-                            viewModel.needsUsername.value = true
-                        } else {
-                            viewModel.authError.value = "Introduce un correo válido y 6 caracteres mínimo"
+                    when {
+                        // Paso 2 del registro: ya tenemos username → escribir en BD
+                        needsUsername -> viewModel.performRegister(email, password, chosenUsername)
+
+                        // Paso 1 del registro: validar y avanzar
+                        isRegistering -> {
+                            if (email.contains("@") && password.length >= 6) {
+                                viewModel.prepareRegister(email, password)  // ← CAMBIADO
+                            } else {
+                                viewModel.authError.value =
+                                    "Introduce un correo válido y 6 caracteres mínimo"
+                            }
                         }
-                    } else {
+
                         // Login normal
-                        viewModel.performLogin(email, password)
+                        else -> viewModel.performLogin(email, password)
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),
@@ -416,7 +378,7 @@ fun AuthScreen(viewModel: MainViewModel) {
                         text = when {
                             needsUsername -> "Finalizar y Entrar"
                             isRegistering -> "Siguiente"
-                            else -> "Iniciar Sesión"
+                            else          -> "Iniciar Sesión"
                         }
                     )
                 }
@@ -424,7 +386,6 @@ fun AuthScreen(viewModel: MainViewModel) {
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Botón para alternar entre Login y Registro (Solo visible en paso 1)
             if (!needsUsername) {
                 TextButton(onClick = {
                     viewModel.isRegistering.value = !isRegistering
@@ -433,7 +394,6 @@ fun AuthScreen(viewModel: MainViewModel) {
                     Text(if (isRegistering) "¿Ya tienes cuenta? Entra aquí" else "¿No tienes cuenta? Regístrate")
                 }
             } else {
-                // Botón para volver atrás si se equivocó de correo
                 TextButton(onClick = { viewModel.needsUsername.value = false }) {
                     Text("Volver atrás")
                 }
@@ -442,7 +402,9 @@ fun AuthScreen(viewModel: MainViewModel) {
     }
 }
 
-// --- 6. ESTRUCTURA DE NAVEGACIÓN (APP PRINCIPAL) ---
+// ─────────────────────────────────────────────────────────────
+// NAVEGACIÓN PRINCIPAL
+// ─────────────────────────────────────────────────────────────
 @Composable
 fun NewsickApp(windowSize: WindowWidthSizeClass, viewModel: MainViewModel) {
     val navController = rememberNavController()
@@ -451,7 +413,7 @@ fun NewsickApp(windowSize: WindowWidthSizeClass, viewModel: MainViewModel) {
         bottomBar = {
             NavigationBar {
                 NavigationBarItem(
-                    icon = { Icon(Icons.Default.Search, contentDescription = "Descubrir") },
+                    icon = { Icon(Icons.Default.Search, contentDescription = "Social") },
                     label = { Text("Social") },
                     selected = navController.currentDestination?.route == "search",
                     onClick = { navController.navigate("search") }
@@ -481,12 +443,8 @@ fun NewsickApp(windowSize: WindowWidthSizeClass, viewModel: MainViewModel) {
                     navController.navigate("feed/$songId")
                 }
             }
-            composable("feed/{songId}") {
-                SocialFeedScreen()
-            }
-            composable("map") {
-                MapScreen(viewModel)
-            }
+            composable("feed/{songId}") { SocialFeedScreen() }
+            composable("map") { MapScreen(viewModel) }
             composable("profile") {
                 UserProfileScreen(
                     viewModel = viewModel,
@@ -494,13 +452,15 @@ fun NewsickApp(windowSize: WindowWidthSizeClass, viewModel: MainViewModel) {
                 )
             }
             composable("settings") {
-                Pantalla(onLogout = { viewModel.logout() }) // Pasamos la función de logout
+                Pantalla(onLogout = { viewModel.logout() })
             }
         }
     }
 }
 
-// --- PANTALLAS PRINCIPALES (Sin cambios mayores, solo integración) ---
+// ─────────────────────────────────────────────────────────────
+// PANTALLAS (con ajuste en UserProfileScreen para usar StateFlow)
+// ─────────────────────────────────────────────────────────────
 
 @Composable
 fun SocialSearchScreen(viewModel: MainViewModel, onCoverClick: (Int) -> Unit) {
@@ -516,7 +476,6 @@ fun SocialSearchScreen(viewModel: MainViewModel, onCoverClick: (Int) -> Unit) {
         Spacer(modifier = Modifier.height(16.dp))
         Text("Explora Momentos Musicales", style = MaterialTheme.typography.titleMedium, color = Color.Gray)
         Spacer(modifier = Modifier.height(8.dp))
-
         LazyVerticalGrid(
             columns = GridCells.Fixed(2),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -532,7 +491,9 @@ fun SocialSearchScreen(viewModel: MainViewModel, onCoverClick: (Int) -> Unit) {
                     contentAlignment = Alignment.Center
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.Default.MusicNote, null, tint = MaterialTheme.colorScheme.onSecondaryContainer, modifier = Modifier.size(40.dp))
+                        Icon(Icons.Default.MusicNote, null,
+                            tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                            modifier = Modifier.size(40.dp))
                         Text(item.title, style = MaterialTheme.typography.labelMedium)
                         Text(item.artist, style = MaterialTheme.typography.labelSmall)
                     }
@@ -577,7 +538,8 @@ fun MapScreen(viewModel: MainViewModel) {
             OutlinedTextField(
                 value = viewModel.mapSearchQuery.value,
                 onValueChange = { viewModel.mapSearchQuery.value = it },
-                modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface, RoundedCornerShape(24.dp)),
+                modifier = Modifier.fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(24.dp)),
                 placeholder = { Text("Buscar ciudad...") },
                 leadingIcon = { Icon(Icons.Default.Search, null) },
                 shape = RoundedCornerShape(24.dp)
@@ -590,9 +552,12 @@ fun MapScreen(viewModel: MainViewModel) {
 fun UserProfileScreen(viewModel: MainViewModel, onSettingsClick: () -> Unit) {
     var showEditDialog by remember { mutableStateOf(false) }
 
-    // Datos de ejemplo del perfil (esto vendría del ViewModel)
-    var userBio by remember { mutableStateOf("Amante de la música electrónica y el café.") }
-    var currentUsername by remember { mutableStateOf("Marcos_Music") }
+    // Datos del usuario activo, editables localmente
+    var currentUsername by remember { mutableStateOf(viewModel.loggedUsername.value) }
+    var userBio         by remember { mutableStateOf(viewModel.loggedBio.value) }
+
+    val collections by viewModel.friendCollections.collectAsState()
+
     Scaffold(
         topBar = {
             Row(
@@ -608,34 +573,26 @@ fun UserProfileScreen(viewModel: MainViewModel, onSettingsClick: () -> Unit) {
         }
     ) { padding ->
         Column(modifier = Modifier.padding(padding).padding(16.dp)) {
-            // CABECERA
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box {
-                    Icon(Icons.Default.AccountCircle, null, modifier = Modifier.size(80.dp))
-                    // Botón para cambiar foto (Solo visible aquí o en el diálogo)
-                }
+                Icon(Icons.Default.AccountCircle, null, modifier = Modifier.size(80.dp))
                 Spacer(Modifier.width(16.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(currentUsername, style = MaterialTheme.typography.titleLarge)
                     Text(userBio, style = MaterialTheme.typography.bodyMedium)
                 }
-
-                // BOTÓN EDITAR (Solo para el dueño)
                 IconButton(onClick = { showEditDialog = true }) {
                     Icon(Icons.Default.Edit, "Editar Perfil")
                 }
             }
             Spacer(Modifier.height(24.dp))
             Text("Mis Canciones", style = MaterialTheme.typography.titleMedium)
-
-            // CANCIONES EN DOS COLUMNAS (Igual que SocialSearchScreen)
             LazyVerticalGrid(
                 columns = GridCells.Fixed(2),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
-                items(viewModel.friendCollections) { collection ->
+                items(collections) { collection ->          // ← usa la lista del StateFlow
                     Card(modifier = Modifier.aspectRatio(1f)) {
                         Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
                             Text(collection.songTitle, textAlign = TextAlign.Center)
@@ -645,111 +602,101 @@ fun UserProfileScreen(viewModel: MainViewModel, onSettingsClick: () -> Unit) {
             }
         }
     }
-    // DIÁLOGO DE EDICIÓN
+
     if (showEditDialog) {
         EditProfileDialog(
+            initialUsername = currentUsername,
+            initialBio      = userBio,
             onDismiss = { showEditDialog = false },
-            onSave = { /* Lógica para guardar en servidor */ }
+            onSave = { newUsername, newBio ->
+                currentUsername          = newUsername
+                userBio                  = newBio
+                viewModel.loggedUsername.value = newUsername
+                viewModel.loggedBio.value      = newBio
+                showEditDialog = false
+            }
         )
     }
 }
 
 @Composable
-fun EditProfileDialog(onDismiss: () -> Unit, onSave: () -> Unit) {
+fun EditProfileDialog(
+    initialUsername: String,
+    initialBio: String,
+    onDismiss: () -> Unit,
+    onSave: (username: String, bio: String) -> Unit
+) {
+    var username by remember { mutableStateOf(initialUsername) }
+    var bio      by remember { mutableStateOf(initialBio) }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Editar Perfil") },
         text = {
             Column {
-                OutlinedButton(onClick = { /* Abrir Galería */ }, modifier = Modifier.fillMaxWidth()) {
-                    Text("Cambiar Foto de Perfil")
-                }
-                OutlinedTextField(value = "Marcos_Music", onValueChange = {}, label = { Text("Nombre de Usuario") })
-
-                Text("Género", modifier = Modifier.padding(top = 8.dp))
-                Row {
-                    RadioButton(selected = true, onClick = {})
-                    Text("Masculino", modifier = Modifier.align(Alignment.CenterVertically))
-                    Spacer(Modifier.width(8.dp))
-                    RadioButton(selected = false, onClick = {})
-                    Text("Femenino", modifier = Modifier.align(Alignment.CenterVertically))
-                }
-
-                OutlinedButton(onClick = { /* Mostrar DatePicker */ }, modifier = Modifier.fillMaxWidth()) {
-                    Text("Fecha de Nacimiento (Privada)")
-                }
+                OutlinedTextField(
+                    value = username,
+                    onValueChange = { username = it },
+                    label = { Text("Nombre de usuario") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = bio,
+                    onValueChange = { bio = it },
+                    label = { Text("Descripción") },
+                    modifier = Modifier.fillMaxWidth(),
+                    maxLines = 3,
+                    placeholder = { Text("Cuéntanos algo sobre ti...") }
+                )
             }
         },
-        confirmButton = { Button(onClick = onSave) { Text("Guardar") } }
+        confirmButton = {
+            Button(
+                onClick = { onSave(username, bio) },
+                enabled = username.isNotBlank()
+            ) { Text("Guardar") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancelar") }
+        }
     )
 }
 
-// --- PANTALLA SETTINGS (Con Botón de Logout) ---
+// ─────────────────────────────────────────────────────────────
+// PANTALLA SETTINGS
+// ─────────────────────────────────────────────────────────────
 @Composable
-fun Pantalla(
-    modifier: Modifier = Modifier,
-    onLogout: () -> Unit
-) {
-    val appName = "Newsick"
-    val appTheme = "Neon Music Night"
-    val appDescription = "Configuración y Feedback de la aplicación."
-    val appVersion = "2.0"
-
+fun Pantalla(modifier: Modifier = Modifier, onLogout: () -> Unit) {
     val context = LocalContext.current
 
     Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(16.dp),
+        modifier = modifier.fillMaxSize().padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-
-        Text(
-            text = appName,
-            style = MaterialTheme.typography.headlineLarge,
-            color = MaterialTheme.colorScheme.primary
-        )
-
+        Text("Newsick", style = MaterialTheme.typography.headlineLarge,
+            color = MaterialTheme.colorScheme.primary)
         Spacer(modifier = Modifier.height(16.dp))
-
-        Text(
-            text = appTheme,
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.secondary
-        )
-
+        Text("Neon Music Night", style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.secondary)
         Spacer(modifier = Modifier.height(8.dp))
-
-        Text(
-            text = appDescription,
-            style = MaterialTheme.typography.bodyLarge,
-            textAlign = TextAlign.Center
-        )
-
+        Text("Configuración y Feedback de la aplicación.",
+            style = MaterialTheme.typography.bodyLarge, textAlign = TextAlign.Center)
         Spacer(modifier = Modifier.height(24.dp))
 
-        // BOTÓN ENVIAR FEEDBACK (EMAIL REAL)
         Button(onClick = {
-            val email = "marcosqh17@gmail.com"
-            val subject = "Feedback sobre $appName"
-            val body = "Hola,\n\nTengo el siguiente feedback sobre la aplicación:\n\n"
-
             val intent = Intent(Intent.ACTION_SENDTO).apply {
                 data = Uri.parse("mailto:")
-                putExtra(Intent.EXTRA_EMAIL, arrayOf(email))
-                putExtra(Intent.EXTRA_SUBJECT, subject)
-                putExtra(Intent.EXTRA_TEXT, body)
+                putExtra(Intent.EXTRA_EMAIL, arrayOf("marcosqh17@gmail.com"))
+                putExtra(Intent.EXTRA_SUBJECT, "Feedback sobre Newsick")
+                putExtra(Intent.EXTRA_TEXT, "Hola,\n\nTengo el siguiente feedback:\n\n")
             }
-
             try {
                 context.startActivity(intent)
             } catch (e: ActivityNotFoundException) {
-                Toast.makeText(
-                    context,
-                    "No se encontró una app de correo",
-                    Toast.LENGTH_SHORT
-                ).show()
+                Toast.makeText(context, "No se encontró una app de correo", Toast.LENGTH_SHORT).show()
             }
         }) {
             Icon(Icons.Filled.Email, contentDescription = "Enviar feedback")
@@ -759,7 +706,6 @@ fun Pantalla(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // BOTÓN CERRAR SESIÓN
         OutlinedButton(
             onClick = onLogout,
             colors = ButtonDefaults.outlinedButtonColors(
@@ -772,9 +718,12 @@ fun Pantalla(
         }
 
         Spacer(modifier = Modifier.height(24.dp))
+        val versionName = try {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName
+        } catch (e: Exception) { "?" }
 
         Text(
-            text = appVersion,
+            text = "v$versionName",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )

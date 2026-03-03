@@ -2,20 +2,19 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    id("com.google.devtools.ksp") version "2.3.5"            // ← KSP independiente de Kotlin
 }
 
 android {
     namespace = "com.makro17.newsick"
-    compileSdk {
-        version = release(35)
-    }
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.makro17.newsick"
         minSdk = 26
         targetSdk = 36
         versionCode = 1
-        versionName = "2.3"
+        versionName = "2.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -38,8 +37,11 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true   // ← necesario para BuildConfig.VERSION_NAME
     }
 }
+
+val roomVersion = "2.7.0"
 
 dependencies {
     implementation(libs.androidx.core.ktx)
@@ -64,4 +66,7 @@ dependencies {
     implementation(libs.androidx.icons.extended)
     implementation(libs.retrofit.core)
     implementation(libs.retrofit.gson)
+    implementation("androidx.room:room-runtime:$roomVersion")
+    implementation("androidx.room:room-ktx:$roomVersion")
+    ksp("androidx.room:room-compiler:$roomVersion")             // ← CAMBIADO: kapt → ksp
 }
