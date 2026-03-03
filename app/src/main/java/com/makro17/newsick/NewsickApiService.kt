@@ -90,7 +90,7 @@ interface NewsickApiService {
 
 object NewsickRetrofit {
     // ⚠️ CAMBIA ESTA IP si tu servidor tiene otra dirección
-    private const val BASE_URL = "http://10.4.0.200:8080/"
+    private const val BASE_URL = "http://192.168.0.171:8081/"
 
     val api: NewsickApiService by lazy {
         Retrofit.Builder()
