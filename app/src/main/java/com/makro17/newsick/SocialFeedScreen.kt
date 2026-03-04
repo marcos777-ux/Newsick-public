@@ -17,21 +17,46 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 
 // ══════════════════════════════════════════════════════════
-// PANTALLA SOCIAL — últimas publicaciones + botón subir
+// PANTALLA SOCIAL
 // ══════════════════════════════════════════════════════════
 
 @Composable
 fun SocialFeedScreen(
     viewModel: MainViewModel,
     onSongClick: (String) -> Unit,
-    onUploadClick: () -> Unit
+    onUploadClick: () -> Unit,
+    onNotificationsClick: () -> Unit,
+    onUserClick: (Int) -> Unit
 ) {
-    val feedSongs by viewModel.feedSongs.collectAsState()
-    val searchQuery by viewModel.userSearchQuery
+    val feedSongs    by viewModel.feedSongs.collectAsState()
+    val searchQuery  by viewModel.userSearchQuery
     val searchResults by viewModel.searchResults
-    val isSearching by viewModel.isSearching
+    val isSearching  by viewModel.isSearching
+    val unreadCount  by viewModel.unreadCount
 
     Scaffold(
+        topBar = {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Newsick", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.primary)
+                BadgedBox(
+                    badge = {
+                        if (unreadCount > 0) {
+                            Badge { Text(if (unreadCount > 9) "9+" else unreadCount.toString()) }
+                        }
+                    }
+                ) {
+                    IconButton(onClick = onNotificationsClick) {
+                        Icon(Icons.Default.Notifications, "Notificaciones y solicitudes")
+                    }
+                }
+            }
+        },
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 onClick = onUploadClick,
@@ -45,7 +70,7 @@ fun SocialFeedScreen(
                 .padding(padding)
                 .fillMaxSize()
         ) {
-            // Barra de búsqueda
+            // Barra de búsqueda de usuarios
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = {
@@ -54,44 +79,59 @@ fun SocialFeedScreen(
                 },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
                 placeholder = { Text("Buscar usuario...") },
                 leadingIcon = { Icon(Icons.Default.PersonSearch, null) },
+                trailingIcon = {
+                    if (searchQuery.isNotEmpty()) {
+                        IconButton(onClick = {
+                            viewModel.userSearchQuery.value = ""
+                            viewModel.searchResults.value = emptyList()
+                        }) {
+                            Icon(Icons.Default.Clear, "Borrar")
+                        }
+                    }
+                },
                 shape = RoundedCornerShape(24.dp),
                 singleLine = true
             )
 
-            // Mostrar resultados de búsqueda si hay query
+            // Resultados de búsqueda
             if (searchQuery.isNotBlank()) {
-                if (isSearching) {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator()
+                when {
+                    isSearching -> {
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator()
+                        }
                     }
-                } else if (searchResults.isEmpty()) {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("No se encontraron usuarios")
-                    }
-                } else {
-                    LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        items(searchResults) { user ->
-                            UserSearchResultItem(
-                                user = user,
-                                onClick = { /* Navegar a perfil del usuario */ }
+                    searchResults.isEmpty() -> {
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Text(
+                                "No se encontraron usuarios",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                        }
+                    }
+                    else -> {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(searchResults) { user ->
+                                UserSearchResultItem(
+                                    user = user,
+                                    onClick = { onUserClick(user.id) }
+                                )
+                            }
                         }
                     }
                 }
             } else if (feedSongs.isEmpty()) {
-                // Estado vacío
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Icon(
-                            Icons.Default.MusicNote,
-                            null,
+                            Icons.Default.MusicNote, null,
                             modifier = Modifier.size(64.dp),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -104,7 +144,6 @@ fun SocialFeedScreen(
                     }
                 }
             } else {
-                // Feed de canciones
                 Text(
                     "Últimas publicaciones",
                     style = MaterialTheme.typography.titleMedium,
@@ -130,30 +169,43 @@ fun SocialFeedScreen(
 }
 
 @Composable
-fun UserSearchResultItem(user: UserEntity, onClick: () -> Unit) {
+fun UserSearchResultItem(user: UserResponse, onClick: () -> Unit) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .clickable { onClick() }
-            .padding(horizontal = 16.dp, vertical = 4.dp)  // ✅ Un solo modifier encadenado
     ) {
         Row(
             modifier = Modifier.padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(
-                Icons.Default.AccountCircle,
-                null,
-                modifier = Modifier.size(48.dp),
-                tint = MaterialTheme.colorScheme.primary
-            )
+            if (user.profilePhoto.isNotBlank()) {
+                AsyncImage(
+                    model = user.profilePhoto,
+                    contentDescription = null,
+                    modifier = Modifier.size(48.dp).clip(RoundedCornerShape(24.dp)),
+                    contentScale = ContentScale.Crop
+                )
+            } else {
+                Icon(
+                    Icons.Default.AccountCircle, null,
+                    modifier = Modifier.size(48.dp),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
             Spacer(Modifier.width(12.dp))
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(user.username, style = MaterialTheme.typography.titleSmall)
                 if (user.bio.isNotBlank()) {
-                    Text(user.bio, style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        user.bio,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1
+                    )
                 }
             }
+            Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -177,18 +229,13 @@ fun SongFeedCard(
             modifier = Modifier.padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Portada de la canción
             AsyncImage(
                 model = song.artworkUrl,
                 contentDescription = null,
-                modifier = Modifier
-                    .size(72.dp)
-                    .clip(RoundedCornerShape(10.dp)),
+                modifier = Modifier.size(72.dp).clip(RoundedCornerShape(10.dp)),
                 contentScale = ContentScale.Crop
             )
             Spacer(Modifier.width(12.dp))
-
-            // Info
             Column(modifier = Modifier.weight(1f)) {
                 Text(song.trackName, style = MaterialTheme.typography.titleSmall)
                 Text(
@@ -198,32 +245,15 @@ fun SongFeedCard(
                 )
                 Spacer(Modifier.height(4.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        Icons.Default.PhotoLibrary, null,
-                        modifier = Modifier.size(14.dp),
-                        tint = MaterialTheme.colorScheme.primary
-                    )
+                    Icon(Icons.Default.PhotoLibrary, null, modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.primary)
                     Spacer(Modifier.width(4.dp))
-                    Text(
-                        "${photos.size} foto(s)",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary
-                    )
+                    Text("${photos.size} foto(s)", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                     Spacer(Modifier.width(10.dp))
-                    Icon(
-                        Icons.Default.Group, null,
-                        modifier = Modifier.size(14.dp),
-                        tint = MaterialTheme.colorScheme.secondary
-                    )
+                    Icon(Icons.Default.Group, null, modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.secondary)
                     Spacer(Modifier.width(4.dp))
-                    Text(
-                        "$contributorCount persona(s)",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.secondary
-                    )
+                    Text("$contributorCount persona(s)", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary)
                 }
             }
-
             Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
 
