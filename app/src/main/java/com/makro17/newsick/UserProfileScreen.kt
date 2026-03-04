@@ -38,8 +38,10 @@ fun UserProfileScreen(
     var isLoading       by remember { mutableStateOf(true) }
     var requestSent     by remember { mutableStateOf(false) }
     var showCommonSongs by remember { mutableStateOf(false) }
+    var showRemoveConfirm by remember { mutableStateOf(false) }
 
     val isSelf = userId == viewModel.loggedUserId.value
+    val currentUser = user
 
     LaunchedEffect(userId) {
         isLoading = true
@@ -48,7 +50,6 @@ fun UserProfileScreen(
             val r = NewsickRetrofit.api.getUserPosts(userId)
             if (r.isSuccessful) posts = r.body() ?: emptyList()
         } catch (_: Exception) {}
-
         if (!isSelf) {
             commonSongs  = viewModel.getCommonSongs(userId)
             friendStatus = viewModel.getFriendStatus(userId)
@@ -56,13 +57,28 @@ fun UserProfileScreen(
         isLoading = false
     }
 
-    val currentUser = user
+    // Diálogo eliminar amigo
+    if (showRemoveConfirm && currentUser != null) {
+        AlertDialog(
+            onDismissRequest = { showRemoveConfirm = false },
+            title = { Text("Eliminar amigo") },
+            text = { Text("¿Seguro que quieres eliminar a ${currentUser.username} de tus amigos?") },
+            confirmButton = {
+                Button(onClick = {
+                    viewModel.removeFriend(userId) { success -> if (success) friendStatus = "none" }
+                    showRemoveConfirm = false
+                }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) {
+                    Text("Eliminar")
+                }
+            },
+            dismissButton = { TextButton(onClick = { showRemoveConfirm = false }) { Text("Cancelar") } }
+        )
+    }
 
     // Diálogo de canciones en común
     if (showCommonSongs && commonSongs.isNotEmpty()) {
-        CommonSongsDialog(songs = commonSongs, onDismiss = { showCommonSongs = false }, onSongClick = { id ->
-            showCommonSongs = false; onSongClick(id)
-        })
+        CommonSongsDialog(songs = commonSongs, onDismiss = { showCommonSongs = false },
+            onSongClick = { id -> showCommonSongs = false; onSongClick(id) })
     }
 
     Scaffold(
@@ -93,23 +109,20 @@ fun UserProfileScreen(
                         AsyncImage(model = currentUser.profilePhoto, contentDescription = null,
                             modifier = Modifier.fillMaxSize().clip(CircleShape), contentScale = ContentScale.Crop)
                     } else {
-                        Icon(Icons.Default.AccountCircle, null,
-                            modifier = Modifier.fillMaxSize(), tint = MaterialTheme.colorScheme.primary)
+                        Icon(Icons.Default.AccountCircle, null, modifier = Modifier.fillMaxSize(), tint = MaterialTheme.colorScheme.primary)
                     }
                 }
                 Spacer(Modifier.width(16.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(currentUser.username, style = MaterialTheme.typography.titleLarge)
                     if (!currentUser.bio.isNullOrBlank()) {
-                        Text(currentUser.bio, style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(currentUser.bio, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    Text("${posts.size} publicación(es)", style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("${posts.size} publicación(es)", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
 
-            // ── Chip de canciones en común (visible siempre si hay) ──
+            // ── Canciones en común ─────────────────────────
             if (!isSelf && commonSongs.isNotEmpty()) {
                 AssistChip(
                     onClick = { showCommonSongs = true },
@@ -125,22 +138,18 @@ fun UserProfileScreen(
                 FriendActionButton(
                     status = effectiveStatus,
                     onAddFriend = {
-                        viewModel.sendFriendRequest(userId) { success ->
-                            if (success) requestSent = true
-                        }
-                    }
+                        viewModel.sendFriendRequest(userId) { success -> if (success) requestSent = true }
+                    },
+                    onRemoveFriend = { showRemoveConfirm = true }
                 )
                 Spacer(Modifier.height(12.dp))
             }
 
             HorizontalDivider()
             Spacer(Modifier.height(12.dp))
-
             Text("Publicaciones (${posts.size})", style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(8.dp))
 
-            // ── Grid de publicaciones ──────────────────────
-            // Se ven las portadas (álbum), las fotos solo se ven en detalle si son amigos
             if (posts.isEmpty()) {
                 Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                     Text("Este usuario aún no ha publicado nada", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -152,22 +161,61 @@ fun UserProfileScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.weight(1f)
                 ) {
-                    items(posts) { post ->
-                        UserPostCard(post = post, onClick = { onSongClick(post.trackId) })
-                    }
+                    items(posts) { post -> UserPostCard(post = post, onClick = { onSongClick(post.trackId) }) }
                 }
             }
         }
     }
 }
 
-// ── Diálogo: lista de canciones en común ──────────────────
+// ── Botón dinámico de amistad (con opción de eliminar) ────
+
+@Composable
+private fun FriendActionButton(
+    status: String,
+    onAddFriend: () -> Unit,
+    onRemoveFriend: () -> Unit
+) {
+    when (status) {
+        "friends" -> {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // Botón estado "ya sois amigos"
+                Button(onClick = {}, enabled = false, modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(
+                        disabledContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                        disabledContentColor   = MaterialTheme.colorScheme.onSecondaryContainer
+                    )) {
+                    Icon(Icons.Default.CheckCircle, null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp)); Text("Ya sois amigos")
+                }
+                // Botón eliminar amigo
+                OutlinedButton(
+                    onClick = onRemoveFriend,
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Icon(Icons.Default.PersonRemove, "Eliminar amigo", modifier = Modifier.size(18.dp))
+                }
+            }
+        }
+        "pending_sent" -> OutlinedButton(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth()) {
+            Icon(Icons.Default.HourglassEmpty, null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp)); Text("Solicitud enviada")
+        }
+        "loading" -> OutlinedButton(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth()) {
+            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+        }
+        else -> Button(onClick = onAddFriend, modifier = Modifier.fillMaxWidth()) {
+            Icon(Icons.Default.PersonAdd, null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp)); Text("Añadir amigo")
+        }
+    }
+}
+
+// ── Diálogo canciones en común ────────────────────────────
 
 @Composable
 private fun CommonSongsDialog(
-    songs: List<PostResponse>,
-    onDismiss: () -> Unit,
-    onSongClick: (String) -> Unit
+    songs: List<PostResponse>, onDismiss: () -> Unit, onSongClick: (String) -> Unit
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -175,13 +223,8 @@ private fun CommonSongsDialog(
         text = {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(songs) { song ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onSongClick(song.trackId) }
-                            .padding(vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
+                    Row(modifier = Modifier.fillMaxWidth().clickable { onSongClick(song.trackId) }.padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
                         AsyncImage(model = song.artworkUrl, contentDescription = null,
                             modifier = Modifier.size(48.dp).clip(RoundedCornerShape(8.dp)),
                             contentScale = ContentScale.Crop)
@@ -200,34 +243,7 @@ private fun CommonSongsDialog(
     )
 }
 
-// ── Botón dinámico de amistad ─────────────────────────────
-
-@Composable
-private fun FriendActionButton(status: String, onAddFriend: () -> Unit) {
-    when (status) {
-        "friends" -> Button(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.buttonColors(
-                disabledContainerColor = MaterialTheme.colorScheme.secondaryContainer,
-                disabledContentColor   = MaterialTheme.colorScheme.onSecondaryContainer
-            )) {
-            Icon(Icons.Default.CheckCircle, null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(8.dp)); Text("Ya sois amigos")
-        }
-        "pending_sent" -> OutlinedButton(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth()) {
-            Icon(Icons.Default.HourglassEmpty, null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(8.dp)); Text("Solicitud enviada")
-        }
-        "loading" -> OutlinedButton(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth()) {
-            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-        }
-        else -> Button(onClick = onAddFriend, modifier = Modifier.fillMaxWidth()) {
-            Icon(Icons.Default.PersonAdd, null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(8.dp)); Text("Añadir amigo")
-        }
-    }
-}
-
-// ── Tarjeta de publicación (portada del álbum) ────────────
+// ── Tarjeta de publicación ────────────────────────────────
 
 @Composable
 private fun UserPostCard(post: PostResponse, onClick: () -> Unit) {
@@ -239,8 +255,7 @@ private fun UserPostCard(post: PostResponse, onClick: () -> Unit) {
                 color = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f)) {
                 Column(modifier = Modifier.padding(8.dp)) {
                     Text(post.trackName, style = MaterialTheme.typography.labelMedium, maxLines = 1)
-                    Text("${post.photoCount} foto(s)", style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary)
+                    Text("${post.photoCount} foto(s)", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                 }
             }
         }

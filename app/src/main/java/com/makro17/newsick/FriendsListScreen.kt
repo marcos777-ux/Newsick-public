@@ -30,16 +30,36 @@ fun FriendsListScreen(
 ) {
     val friends by viewModel.friendsList
 
+    // Diálogo de confirmación para eliminar amigo
+    var friendToRemove by remember { mutableStateOf<FriendshipResponse?>(null) }
+
     LaunchedEffect(Unit) { viewModel.loadFriendsList() }
+
+    // Diálogo de confirmación
+    friendToRemove?.let { friend ->
+        AlertDialog(
+            onDismissRequest = { friendToRemove = null },
+            title = { Text("Eliminar amigo") },
+            text = { Text("¿Seguro que quieres eliminar a ${friend.friendUsername} de tus amigos?") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.removeFriend(friend.friendId)
+                        friendToRemove = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) { Text("Eliminar") }
+            },
+            dismissButton = { TextButton(onClick = { friendToRemove = null }) { Text("Cancelar") } }
+        )
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Mis amigos") },
+                title = { Text("Mis amigos (${friends.size})") },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Volver")
-                    }
+                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Volver") }
                 },
                 actions = {
                     IconButton(onClick = { viewModel.loadFriendsList() }) {
@@ -66,14 +86,12 @@ fun FriendsListScreen(
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                item {
-                    Text("${friends.size} amigo${if (friends.size != 1) "s" else ""}",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(bottom = 4.dp))
-                }
                 items(friends, key = { it.friendId }) { friend ->
-                    FriendItem(friend = friend, onClick = { onUserClick(friend.friendId) })
+                    FriendItem(
+                        friend     = friend,
+                        onClick    = { onUserClick(friend.friendId) },
+                        onRemove   = { friendToRemove = friend }
+                    )
                 }
             }
         }
@@ -81,9 +99,18 @@ fun FriendsListScreen(
 }
 
 @Composable
-private fun FriendItem(friend: FriendshipResponse, onClick: () -> Unit) {
-    Card(modifier = Modifier.fillMaxWidth().clickable { onClick() }) {
-        Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+private fun FriendItem(
+    friend: FriendshipResponse,
+    onClick: () -> Unit,
+    onRemove: () -> Unit
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .clickable { onClick() }
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             if (friend.friendProfilePhoto.isNotBlank()) {
                 AsyncImage(model = friend.friendProfilePhoto, contentDescription = null,
                     modifier = Modifier.size(52.dp).clip(CircleShape), contentScale = ContentScale.Crop)
@@ -93,7 +120,12 @@ private fun FriendItem(friend: FriendshipResponse, onClick: () -> Unit) {
             }
             Spacer(Modifier.width(12.dp))
             Text(friend.friendUsername, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-            Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+
+            // Botón eliminar amigo
+            IconButton(onClick = onRemove) {
+                Icon(Icons.Default.PersonRemove, "Eliminar amigo",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
     }
 }

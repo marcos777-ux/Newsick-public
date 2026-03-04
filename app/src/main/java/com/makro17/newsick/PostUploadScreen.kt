@@ -1,7 +1,9 @@
 package com.makro17.newsick
 
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -27,11 +29,16 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
+import okhttp3.RequestBody.Companion.toRequestBody
+
+private const val TAG = "PostUpload"
 
 // ══════════════════════════════════════════════════════════
-// FLUJO DE SUBIDA DE PUBLICACIÓN
-// Paso 0 → buscar canción (iTunes)
-// Paso 1 → seleccionar fotos
+// FLUJO DE PUBLICACIÓN
+// Paso 0: buscar canción en iTunes
+// Paso 1: seleccionar fotos, subirlas al servidor, publicar
 // ══════════════════════════════════════════════════════════
 
 @Composable
@@ -40,177 +47,248 @@ fun PostUploadScreen(
     onPostCreated: () -> Unit,
     onBack: () -> Unit
 ) {
-    var step by remember { mutableStateOf(0) }
-    var searchQuery by remember { mutableStateOf("") }
+    var step          by remember { mutableStateOf(0) }
+    var searchQuery   by remember { mutableStateOf("") }
     var searchResults by remember { mutableStateOf<List<ItunesTrack>>(emptyList()) }
-    var isSearching by remember { mutableStateOf(false) }
+    var isSearching   by remember { mutableStateOf(false) }
     var selectedTrack by remember { mutableStateOf<ItunesTrack?>(null) }
-    val selectedPhotos = remember { mutableStateListOf<Uri>() }
-    var isUploading by remember { mutableStateOf(false) }
+    val selectedUris   = remember { mutableStateListOf<Uri>() }
+
+    var isUploading  by remember { mutableStateOf(false) }
+    var statusMsg    by remember { mutableStateOf("") }
+    var errorMsg     by remember { mutableStateOf<String?>(null) }
 
     val context = LocalContext.current
+    val scope   = rememberCoroutineScope()
 
-    // Selector múltiple de imágenes (hasta 10)
     val photoPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.PickMultipleVisualMedia(maxItems = 10)
     ) { uris ->
         uris.forEach { uri ->
-            // Persiste el permiso de lectura para que la URI siga siendo válida
             try {
                 context.contentResolver.takePersistableUriPermission(
                     uri, Intent.FLAG_GRANT_READ_URI_PERMISSION
                 )
             } catch (_: Exception) {}
         }
-        selectedPhotos.addAll(uris)
+        selectedUris.addAll(uris.filter { it !in selectedUris })
     }
 
     Scaffold(
         topBar = {
             Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = { if (step == 0) onBack() else step = 0 }) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Atrás")
-                }
+                IconButton(onClick = {
+                    if (step == 0) onBack()
+                    else { step = 0; errorMsg = null; statusMsg = "" }
+                }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Atrás") }
                 Text(
-                    text = if (step == 0) "Buscar canción" else "Añadir fotos",
+                    if (step == 0) "Buscar canción" else "Añadir fotos",
                     style = MaterialTheme.typography.titleLarge
                 )
             }
         }
     ) { padding ->
-        Box(modifier = Modifier.padding(padding).fillMaxSize()) {
+        Box(Modifier.padding(padding).fillMaxSize()) {
             when (step) {
+
+                // ── Paso 0: búsqueda ──────────────────────
                 0 -> SongSearchStep(
-                    query = searchQuery,
-                    onQueryChange = { searchQuery = it; isSearching = it.length >= 2 },
-                    results = searchResults,
-                    isSearching = isSearching,
+                    query          = searchQuery,
+                    onQueryChange  = { q -> searchQuery = q },
+                    results        = searchResults,
+                    isSearching    = isSearching,
                     onResultsReady = { searchResults = it; isSearching = false },
-                    onTrackSelected = { track -> selectedTrack = track; step = 1 }
+                    onSearching    = { isSearching = true },
+                    onTrackSelected = { track ->
+                        selectedTrack = track
+                        selectedUris.clear()
+                        errorMsg = null; statusMsg = ""
+                        step = 1
+                    }
                 )
+
+                // ── Paso 1: fotos ─────────────────────────
                 1 -> PhotoSelectionStep(
-                    track = selectedTrack!!,
-                    selectedPhotos = selectedPhotos,
-                    isUploading = isUploading,
-                    onAddPhotos = {
+                    track          = selectedTrack!!,
+                    selectedUris   = selectedUris,
+                    isUploading    = isUploading,
+                    statusMsg      = statusMsg,
+                    errorMsg       = errorMsg,
+                    onAddPhotos    = {
                         photoPicker.launch(
                             PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                         )
                     },
-                    onRemovePhoto = { selectedPhotos.remove(it) },
-                    onConfirm = {
-                        isUploading = true
-                        val t = selectedTrack!!
-                        viewModel.createPost(
-                            trackId    = t.trackId.toString(),
-                            trackName  = t.trackName,
-                            artistName = t.artistName,
-                            artworkUrl = t.artworkUrl300,
-                            photoUris  = selectedPhotos.map { it.toString() }
-                        )
-                        onPostCreated()
+                    onRemoveUri    = { selectedUris.remove(it) },
+                    onPublish      = {
+                        scope.launch {
+                            isUploading = true
+                            errorMsg    = null
+                            val t       = selectedTrack!!
+                            val uploadedUrls = mutableListOf<String>()
+
+                            selectedUris.forEachIndexed { idx, uri ->
+                                statusMsg = "Subiendo foto ${idx + 1} de ${selectedUris.size}…"
+                                Log.d(TAG, "Subiendo $uri")
+
+                                val relUrl = uploadPhoto(context, uri)
+                                if (relUrl != null) {
+                                    val abs = if (relUrl.startsWith("http")) relUrl
+                                              else NewsickRetrofit.BASE_URL.trimEnd('/') + relUrl
+                                    uploadedUrls.add(abs)
+                                    Log.d(TAG, "OK → $abs")
+                                } else {
+                                    errorMsg    = "❌ Error al subir foto ${idx + 1}. Comprueba tu conexión e inténtalo de nuevo."
+                                    statusMsg   = ""
+                                    isUploading = false
+                                    return@launch
+                                }
+                            }
+
+                            statusMsg = "Guardando publicación…"
+                            Log.d(TAG, "Creando post con ${uploadedUrls.size} foto(s)")
+                            val ok = viewModel.createPostAsync(
+                                trackId    = t.trackId.toString(),
+                                trackName  = t.trackName,
+                                artistName = t.artistName,
+                                artworkUrl = t.artworkUrl300,
+                                photoUris  = uploadedUrls
+                            )
+                            isUploading = false
+                            if (ok) {
+                                onPostCreated()
+                            } else {
+                                errorMsg  = "❌ Las fotos se subieron pero no se pudo guardar la publicación. Inténtalo de nuevo."
+                                statusMsg = ""
+                            }
+                        }
                     }
                 )
             }
         }
     }
 }
+
+// ══════════════════════════════════════════════════════════
+// Sube una sola foto al servidor — devuelve "/uploads/xxx.jpg" o null
+// ══════════════════════════════════════════════════════════
+private suspend fun uploadPhoto(context: Context, uri: Uri): String? =
+    withContext(Dispatchers.IO) {
+        try {
+            val stream = context.contentResolver.openInputStream(uri)
+            if (stream == null) {
+                Log.e(TAG, "No se pudo abrir el stream para $uri")
+                return@withContext null
+            }
+            val bytes = stream.readBytes()
+            stream.close()
+
+            if (bytes.isEmpty()) {
+                Log.e(TAG, "El archivo está vacío: $uri")
+                return@withContext null
+            }
+
+            val mime = context.contentResolver.getType(uri) ?: "image/jpeg"
+            val ext  = when (mime) {
+                "image/png"  -> "png"
+                "image/webp" -> "webp"
+                else         -> "jpg"
+            }
+
+            val body = bytes.toRequestBody(mime.toMediaType())
+            val part = MultipartBody.Part.createFormData("photo", "photo.$ext", body)
+
+            val resp = NewsickRetrofit.api.uploadPhoto(part)
+            if (resp.isSuccessful) {
+                val url = resp.body()?.url
+                Log.d(TAG, "Upload OK: $url")
+                url
+            } else {
+                Log.e(TAG, "Upload HTTP ${resp.code()}: ${resp.errorBody()?.string()}")
+                null
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Upload exception: ${e.message}", e)
+            null
+        }
+    }
 
 // ── Paso 0: búsqueda de canción ───────────────────────────
 
 @Composable
 private fun SongSearchStep(
-    query: String,
-    onQueryChange: (String) -> Unit,
-    results: List<ItunesTrack>,
-    isSearching: Boolean,
+    query: String, onQueryChange: (String) -> Unit,
+    results: List<ItunesTrack>, isSearching: Boolean,
     onResultsReady: (List<ItunesTrack>) -> Unit,
+    onSearching: () -> Unit,
     onTrackSelected: (ItunesTrack) -> Unit
 ) {
-    var searchJob by remember { mutableStateOf<Job?>(null) }
+    var job by remember { mutableStateOf<Job?>(null) }
+    val scope = rememberCoroutineScope()
 
-    LaunchedEffect(query) {
-        searchJob?.cancel() // Cancelar búsqueda anterior
-
-        if (query.length >= 2) {
-            searchJob = launch {
-                delay(400) // Debounce
-                try {
-                    val res = withContext(Dispatchers.IO) {
-                        ItunesRetrofit.api.searchMusic(query)
-                    }
-                    // Filtrar solo canciones válidas
-                    val validResults = res.results.filter {
-                        it.trackId != 0L && it.trackName.isNotBlank()
-                    }
-                    onResultsReady(validResults)
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                    onResultsReady(emptyList())
-                }
-            }
-        } else {
-            onResultsReady(emptyList())
-        }
-    }
-
-    Column(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         OutlinedTextField(
             value = query,
-            onValueChange = onQueryChange,
+            onValueChange = { q ->
+                onQueryChange(q)
+                job?.cancel()
+                if (q.length >= 2) {
+                    onSearching()
+                    job = scope.launch {
+                        delay(400)
+                        try {
+                            val res = withContext(Dispatchers.IO) { ItunesRetrofit.api.searchMusic(q) }
+                            onResultsReady(res.results.filter { it.trackId != 0L && it.trackName.isNotBlank() })
+                        } catch (_: Exception) { onResultsReady(emptyList()) }
+                    }
+                } else onResultsReady(emptyList())
+            },
             modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("Nombre de canción o artista...") },
+            placeholder = { Text("Nombre de canción o artista…") },
             leadingIcon = { Icon(Icons.Default.Search, null) },
             shape = RoundedCornerShape(24.dp),
             singleLine = true
         )
         Spacer(Modifier.height(8.dp))
-
-        if (isSearching && query.length >= 2) {
-            Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
-            }
-        } else if (query.length >= 2 && results.isEmpty()) {
-            Text(
-                "No se encontraron resultados",
-                modifier = Modifier.fillMaxWidth(),
-                textAlign = TextAlign.Center,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        } else {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                items(results) { track ->
-                    TrackResultItem(track = track, onClick = { onTrackSelected(track) })
+        when {
+            isSearching ->
+                Box(Modifier.fillMaxWidth().padding(32.dp), Alignment.Center) {
+                    CircularProgressIndicator()
                 }
-            }
+
+            query.length >= 2 && results.isEmpty() ->
+                Text(
+                    text = "Sin resultados para \"$query\"",
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.Center,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+            else ->
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    items(results) { t -> TrackRow(t) { onTrackSelected(t) } }
+                }
         }
     }
 }
 
 @Composable
-private fun TrackResultItem(track: ItunesTrack, onClick: () -> Unit) {
+private fun TrackRow(track: ItunesTrack, onClick: () -> Unit) {
     Card(modifier = Modifier.fillMaxWidth(), onClick = onClick) {
-        Row(
-            modifier = Modifier.padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            AsyncImage(
-                model = track.artworkUrl100,
-                contentDescription = null,
-                modifier = Modifier.size(56.dp).clip(RoundedCornerShape(8.dp)),
-                contentScale = ContentScale.Crop
-            )
+        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            AsyncImage(track.artworkUrl100, null,
+                Modifier.size(56.dp).clip(RoundedCornerShape(8.dp)),
+                contentScale = ContentScale.Crop)
             Spacer(Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
+            Column(Modifier.weight(1f)) {
                 Text(track.trackName, style = MaterialTheme.typography.titleSmall)
-                Text(
-                    track.artistName,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Text(track.artistName, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
                 track.collectionName?.let {
                     Text(it, style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -226,26 +304,26 @@ private fun TrackResultItem(track: ItunesTrack, onClick: () -> Unit) {
 @Composable
 private fun PhotoSelectionStep(
     track: ItunesTrack,
-    selectedPhotos: List<Uri>,
+    selectedUris: List<Uri>,
     isUploading: Boolean,
+    statusMsg: String,
+    errorMsg: String?,
     onAddPhotos: () -> Unit,
-    onRemovePhoto: (Uri) -> Unit,
-    onConfirm: () -> Unit
+    onRemoveUri: (Uri) -> Unit,
+    onPublish: () -> Unit
 ) {
     LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
+        Modifier.fillMaxSize().padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // Canción seleccionada
+        // Canción elegida
         item {
-            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
-                Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    AsyncImage(
-                        model = track.artworkUrl300,
-                        contentDescription = null,
-                        modifier = Modifier.size(64.dp).clip(RoundedCornerShape(8.dp)),
-                        contentScale = ContentScale.Crop
-                    )
+            Card(colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.primaryContainer)) {
+                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    AsyncImage(track.artworkUrl300, null,
+                        Modifier.size(64.dp).clip(RoundedCornerShape(8.dp)),
+                        contentScale = ContentScale.Crop)
                     Spacer(Modifier.width(12.dp))
                     Column {
                         Text(track.trackName, style = MaterialTheme.typography.titleMedium)
@@ -255,9 +333,13 @@ private fun PhotoSelectionStep(
             }
         }
 
-        // Botón añadir fotos
+        // Botón añadir
         item {
-            OutlinedButton(onClick = onAddPhotos, modifier = Modifier.fillMaxWidth()) {
+            OutlinedButton(
+                onClick = onAddPhotos,
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !isUploading
+            ) {
                 Icon(Icons.Default.AddPhotoAlternate, null)
                 Spacer(Modifier.width(8.dp))
                 Text("Añadir fotos (máx. 10)")
@@ -265,47 +347,62 @@ private fun PhotoSelectionStep(
         }
 
         // Contador
-        if (selectedPhotos.isNotEmpty()) {
+        if (selectedUris.isNotEmpty()) {
             item {
-                Text(
-                    "${selectedPhotos.size} foto(s) seleccionada(s)",
+                Text("${selectedUris.size} foto(s) seleccionada(s)",
                     style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary
-                )
+                    color = MaterialTheme.colorScheme.primary)
             }
         }
 
-        // Previsualización de fotos
-        items(selectedPhotos) { uri ->
-            Box {
-                AsyncImage(
-                    model = uri,
-                    contentDescription = null,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(220.dp)
-                        .clip(RoundedCornerShape(12.dp)),
-                    contentScale = ContentScale.Crop
-                )
-                IconButton(
-                    onClick = { onRemovePhoto(uri) },
-                    modifier = Modifier.align(Alignment.TopEnd)
-                ) {
-                    Icon(Icons.Default.Cancel, "Eliminar", tint = MaterialTheme.colorScheme.error)
+        // Error visible
+        errorMsg?.let { msg ->
+            item {
+                Card(colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer)) {
+                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Error, null, tint = MaterialTheme.colorScheme.error)
+                        Spacer(Modifier.width(8.dp))
+                        Text(msg, style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer)
+                    }
                 }
             }
         }
 
-        // Botón publicar
+        // Previsualización de fotos
+        items(selectedUris) { uri ->
+            Box {
+                AsyncImage(uri, null,
+                    Modifier.fillMaxWidth().height(220.dp).clip(RoundedCornerShape(12.dp)),
+                    contentScale = ContentScale.Crop)
+                if (!isUploading) {
+                    IconButton(
+                        onClick = { onRemoveUri(uri) },
+                        modifier = Modifier.align(Alignment.TopEnd)
+                    ) {
+                        Icon(Icons.Default.Cancel, "Quitar",
+                            tint = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
+        }
+
+        // Botón publicar / spinner
         item {
-            Button(
-                onClick = onConfirm,
-                modifier = Modifier.fillMaxWidth(),
-                enabled = selectedPhotos.isNotEmpty() && !isUploading
-            ) {
-                if (isUploading) {
-                    CircularProgressIndicator(modifier = Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary)
-                } else {
+            if (isUploading) {
+                Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator()
+                    Spacer(Modifier.height(8.dp))
+                    Text(statusMsg, style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            } else {
+                Button(
+                    onClick = onPublish,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = selectedUris.isNotEmpty()
+                ) {
                     Icon(Icons.Default.CloudUpload, null)
                     Spacer(Modifier.width(8.dp))
                     Text("Publicar")
