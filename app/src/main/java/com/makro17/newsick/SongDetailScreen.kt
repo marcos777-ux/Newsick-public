@@ -97,7 +97,7 @@ fun SongDetailScreen(
                                     mediaPlayer?.stop()
                                     mediaPlayer?.release()
                                     mediaPlayer = null
-                                    onBack()  // ← Volver al perfil
+                                    onBack()  // ← Volver al perfil (se refrescará solo)
                                 }
                             }
                         }

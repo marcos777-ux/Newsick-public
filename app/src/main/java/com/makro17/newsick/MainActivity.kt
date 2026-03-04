@@ -372,12 +372,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     // ✅ 1. Borrar foto de Room localmente
                     db.postPhotoDao().deleteById(photoId)
 
-                    // ✅ 2. Limpiar canciones sin fotos (IMPORTANTE!)
-                    if (loggedUserId.value > 0) {
-                        repo.cleanupEmptySongs(loggedUserId.value)
+                    // ✅ 2. Obtener el track_id de la foto antes de borrarla
+                    // Necesitamos consultar la foto primero para saber su track_id
+                    val allPhotos = db.postPhotoDao().getAllPhotos()
+                    val deletedPhoto = allPhotos.find { it.id == photoId }
+
+                    // ✅ 3. Si encontramos la foto, limpiar canción si no hay más fotos
+                    if (deletedPhoto != null) {
+                        repo.cleanupEmptySongs(deletedPhoto.trackId)
                     }
 
-                    // ✅ 3. Invalidar cachés
+                    // ✅ 4. Invalidar cachés
                     invalidateMixedCache()
                     loadFeed()
 
