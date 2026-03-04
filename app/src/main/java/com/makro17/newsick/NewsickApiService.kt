@@ -26,8 +26,8 @@ object AuthManager {
     val id: Int,
     val email: String,
     val username: String,
-    val bio: String,
-    val profilePhoto: String = "",
+    val profilePhoto: String? = null,
+    val bio: String? = null,
     val createdAt: String = ""
 )
 

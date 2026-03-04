@@ -179,7 +179,7 @@ fun UserSearchResultItem(user: UserResponse, onClick: () -> Unit) {
             modifier = Modifier.padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            if (user.profilePhoto.isNotBlank()) {
+            if (!user.profilePhoto.isNullOrBlank()) {
                 AsyncImage(
                     model = user.profilePhoto,
                     contentDescription = null,
@@ -196,7 +196,7 @@ fun UserSearchResultItem(user: UserResponse, onClick: () -> Unit) {
             Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(user.username, style = MaterialTheme.typography.titleSmall)
-                if (user.bio.isNotBlank()) {
+                if (!user.bio.isNullOrBlank()) {
                     Text(
                         user.bio,
                         style = MaterialTheme.typography.bodySmall,

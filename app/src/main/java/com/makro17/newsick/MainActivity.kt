@@ -159,19 +159,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun saveSession(auth: AuthResponse) {
         loggedUserId.value       = auth.user.id
         loggedUsername.value     = auth.user.username
-        loggedBio.value          = auth.user.bio
+        loggedBio.value          = auth.user.bio ?: ""
         loggedEmail.value        = auth.user.email
-        loggedProfilePhoto.value = auth.user.profilePhoto
+        loggedProfilePhoto.value = auth.user.profilePhoto?: ""
         AuthManager.token        = auth.token
         AuthManager.userId       = auth.user.id
         isLoggedIn.value = true
         prefs.edit().apply {
             putInt("user_id", auth.user.id)
             putString("username", auth.user.username)
-            putString("bio", auth.user.bio)
+            putString("bio", auth.user.bio ?: "")
             putString("email", auth.user.email)
             putString("token", auth.token)
-            putString("profile_photo", auth.user.profilePhoto)
+            putString("profile_photo", auth.user.profilePhoto ?: "")
             apply()
         }
     }
@@ -208,12 +208,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (response.isSuccessful) {
                     val user = response.body()!!
                     loggedUsername.value     = user.username
-                    loggedBio.value          = user.bio
-                    loggedProfilePhoto.value = user.profilePhoto
+                    loggedBio.value          = user.bio ?: ""
+                    loggedProfilePhoto.value = user.profilePhoto ?: ""
                     prefs.edit().apply {
                         putString("username", user.username)
-                        putString("bio", user.bio)
-                        putString("profile_photo", user.profilePhoto)
+                        putString("bio", user.bio ?: "")
+                        putString("profile_photo", user.profilePhoto ?: "")
                         apply()
                     }
                     onResult(true)
