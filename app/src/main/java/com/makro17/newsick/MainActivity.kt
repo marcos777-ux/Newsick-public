@@ -15,6 +15,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.material3.darkColorScheme
@@ -33,7 +34,6 @@ import androidx.compose.ui.unit.dp
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import androidx.navigation.NavController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -48,6 +48,7 @@ import kotlinx.coroutines.launch
 // ══════════════════════════════════════════════════════════
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
+
     private var searchJob: Job? = null
     private val api = NewsickRetrofit.api
 
@@ -60,24 +61,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _isLoading = MutableStateFlow(true)
     val isLoading = _isLoading.asStateFlow()
 
-    var isLoggedIn     = mutableStateOf(false)
-    var authError      = mutableStateOf<String?>(null)
-    var isRegistering  = mutableStateOf(false)
-    var needsUsername  = mutableStateOf(false)
-    var loggedUsername = mutableStateOf("")
-    var loggedBio      = mutableStateOf("")
-    var loggedEmail    = mutableStateOf("")
-    var loggedProfilePhoto = mutableStateOf("")
-    var loggedUserId   = mutableStateOf(0)
+    var isLoggedIn          = mutableStateOf(false)
+    var authError           = mutableStateOf<String?>(null)
+    var isRegistering       = mutableStateOf(false)
+    var needsUsername       = mutableStateOf(false)
+    var loggedUsername      = mutableStateOf("")
+    var loggedBio           = mutableStateOf("")
+    var loggedEmail         = mutableStateOf("")
+    var loggedProfilePhoto  = mutableStateOf("")
+    var loggedUserId        = mutableStateOf(0)
 
-    var userSearchQuery  = mutableStateOf("")
-    var searchResults    = mutableStateOf<List<UserResponse>>(emptyList())
-    var isSearching      = mutableStateOf(false)
+    var userSearchQuery     = mutableStateOf("")
+    var searchResults       = mutableStateOf<List<UserResponse>>(emptyList())
+    var isSearching         = mutableStateOf(false)
 
-    // Friend requests & notifications
-    var pendingRequests  = mutableStateOf<List<FriendRequestResponse>>(emptyList())
-    var notifications    = mutableStateOf<List<NotificationResponse>>(emptyList())
-    var unreadCount      = mutableStateOf(0)
+    var pendingRequests     = mutableStateOf<List<FriendRequestResponse>>(emptyList())
+    var notifications       = mutableStateOf<List<NotificationResponse>>(emptyList())
+    var unreadCount         = mutableStateOf(0)
+    var friendCount         = mutableStateOf(0)
+    var friendsList         = mutableStateOf<List<FriendshipResponse>>(emptyList())
+
+    // Feed desde API (incluye amigos), lista de PostResponse
+    var apiFeed             = mutableStateOf<List<PostResponse>>(emptyList())
+    // Caché de fotos por trackId: fotos mezcladas (usuario + amigos)
+    var mixedPhotosCache    = mutableStateOf<Map<String, List<PhotoResponse>>>(emptyMap())
 
     private var pendingEmail    = ""
     private var pendingPassword = ""
@@ -96,14 +103,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val savedUserId = prefs.getInt("user_id", 0)
             if (savedUserId > 0) {
-                loggedUserId.value   = savedUserId
-                loggedUsername.value = prefs.getString("username", "") ?: ""
-                loggedBio.value      = prefs.getString("bio", "") ?: ""
-                loggedEmail.value    = prefs.getString("email", "") ?: ""
+                loggedUserId.value      = savedUserId
+                loggedUsername.value    = prefs.getString("username", "") ?: ""
+                loggedBio.value         = prefs.getString("bio", "") ?: ""
+                loggedEmail.value       = prefs.getString("email", "") ?: ""
                 loggedProfilePhoto.value = prefs.getString("profile_photo", "") ?: ""
-                val token = prefs.getString("token", "") ?: ""
-                AuthManager.token  = token
-                AuthManager.userId = savedUserId
+                AuthManager.token       = prefs.getString("token", "") ?: ""
+                AuthManager.userId      = savedUserId
                 isLoggedIn.value = true
             }
             delay(1000)
@@ -115,44 +121,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun performLogin(email: String, pass: String) {
         viewModelScope.launch {
-            _isLoading.value = true
-            authError.value = null
+            _isLoading.value = true; authError.value = null
             try {
-                val response = api.login(LoginRequest(email, pass))
-                if (response.isSuccessful) {
-                    val auth = response.body()!!
-                    saveSession(auth)
-                } else {
-                    authError.value = "Correo o contraseña incorrectos"
-                }
-            } catch (e: Exception) {
-                authError.value = "Error de conexión: ${e.message}"
-            }
+                val r = api.login(LoginRequest(email, pass))
+                if (r.isSuccessful) saveSession(r.body()!!)
+                else authError.value = "Correo o contraseña incorrectos"
+            } catch (e: Exception) { authError.value = "Error de conexión: ${e.message}" }
             _isLoading.value = false
         }
     }
 
     fun prepareRegister(email: String, pass: String) {
-        pendingEmail    = email
-        pendingPassword = pass
-        needsUsername.value = true
+        pendingEmail = email; pendingPassword = pass; needsUsername.value = true
     }
 
     fun performRegister(email: String, pass: String, username: String) {
         viewModelScope.launch {
-            _isLoading.value = true
-            authError.value = null
+            _isLoading.value = true; authError.value = null
             try {
-                val response = api.register(RegisterRequest(email, pass, username))
-                if (response.isSuccessful) {
-                    val auth = response.body()!!
-                    saveSession(auth)
-                } else {
-                    authError.value = "Este correo ya está registrado"
-                }
-            } catch (e: Exception) {
-                authError.value = "Error de conexión: ${e.message}"
-            }
+                val r = api.register(RegisterRequest(email, pass, username))
+                if (r.isSuccessful) saveSession(r.body()!!)
+                else authError.value = "Este correo ya está registrado"
+            } catch (e: Exception) { authError.value = "Error de conexión: ${e.message}" }
             _isLoading.value = false
         }
     }
@@ -162,10 +152,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         loggedUsername.value     = auth.user.username
         loggedBio.value          = auth.user.bio ?: ""
         loggedEmail.value        = auth.user.email
-        loggedProfilePhoto.value = auth.user.profilePhoto?: ""
+        loggedProfilePhoto.value = auth.user.profilePhoto ?: ""
         AuthManager.token        = auth.token
         AuthManager.userId       = auth.user.id
-        isLoggedIn.value = true
+        isLoggedIn.value         = true
         prefs.edit().apply {
             putInt("user_id", auth.user.id)
             putString("username", auth.user.username)
@@ -178,69 +168,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun logout() {
-        isLoggedIn.value = false
-        isRegistering.value = false
-        needsUsername.value = false
-        loggedUserId.value = 0
-        loggedUsername.value = ""
-        loggedBio.value = ""
-        loggedEmail.value = ""
-        loggedProfilePhoto.value = ""
-        AuthManager.token = ""
-        AuthManager.userId = 0
-        pendingEmail = ""
-        pendingPassword = ""
+        isLoggedIn.value = false; isRegistering.value = false; needsUsername.value = false
+        loggedUserId.value = 0; loggedUsername.value = ""; loggedBio.value = ""
+        loggedEmail.value = ""; loggedProfilePhoto.value = ""
+        AuthManager.token = ""; AuthManager.userId = 0
+        pendingEmail = ""; pendingPassword = ""
         prefs.edit().clear().apply()
     }
 
     // ── PERFIL ────────────────────────────────────────────
 
-    fun updateProfile(
-        newUsername: String,
-        newBio: String,
-        newProfilePhoto: String,
-        onResult: (Boolean) -> Unit
-    ) {
+    fun updateProfile(newUsername: String, newBio: String, newPhoto: String, onResult: (Boolean) -> Unit) {
         viewModelScope.launch {
             try {
-                val response = api.updateProfile(
-                    UpdateProfileRequest(bio = newBio, username = newUsername, profilePhoto = newProfilePhoto)
-                )
-                if (response.isSuccessful) {
-                    val user = response.body()!!
-                    loggedUsername.value     = user.username
-                    loggedBio.value          = user.bio ?: ""
-                    loggedProfilePhoto.value = user.profilePhoto ?: ""
+                val r = api.updateProfile(UpdateProfileRequest(bio = newBio, username = newUsername, profilePhoto = newPhoto))
+                if (r.isSuccessful) {
+                    val u = r.body()!!
+                    loggedUsername.value = u.username; loggedBio.value = u.bio ?: ""; loggedProfilePhoto.value = u.profilePhoto ?: ""
                     prefs.edit().apply {
-                        putString("username", user.username)
-                        putString("bio", user.bio ?: "")
-                        putString("profile_photo", user.profilePhoto ?: "")
-                        apply()
+                        putString("username", u.username); putString("bio", u.bio ?: ""); putString("profile_photo", u.profilePhoto ?: ""); apply()
                     }
                     onResult(true)
-                } else {
-                    onResult(false)
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-                onResult(false)
-            }
+                } else onResult(false)
+            } catch (e: Exception) { e.printStackTrace(); onResult(false) }
         }
     }
 
     fun deleteAccount(password: String, onResult: (Boolean) -> Unit) {
         viewModelScope.launch {
             try {
-                val response = api.deleteAccount(DeleteAccountRequest(password))
-                if (response.isSuccessful) {
-                    logout()
-                    onResult(true)
-                } else {
-                    onResult(false)
-                }
-            } catch (e: Exception) {
-                onResult(false)
-            }
+                val r = api.deleteAccount(DeleteAccountRequest(password))
+                if (r.isSuccessful) { logout(); onResult(true) } else onResult(false)
+            } catch (e: Exception) { onResult(false) }
         }
     }
 
@@ -248,75 +207,74 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun searchUsers(query: String) {
         searchJob?.cancel()
-        if (query.isBlank()) {
-            searchResults.value = emptyList()
-            isSearching.value = false
-            return
-        }
-
+        if (query.isBlank()) { searchResults.value = emptyList(); isSearching.value = false; return }
         searchJob = viewModelScope.launch {
-            delay(300) // ⏳ Espera 300ms antes de disparar la petición
-            isSearching.value = true
+            delay(300); isSearching.value = true
             try {
-                val response = api.searchUsers(SearchUsersRequest(query))
-                // Manejamos el éxito o fallo con seguridad
-                searchResults.value = if (response.isSuccessful) response.body() ?: emptyList() else emptyList()
-            } catch (e: Exception) {
-                searchResults.value = emptyList()
-            } finally {
-                isSearching.value = false
-            }
+                val r = api.searchUsers(SearchUsersRequest(query))
+                searchResults.value = if (r.isSuccessful) r.body() ?: emptyList() else emptyList()
+            } catch (_: Exception) { searchResults.value = emptyList() }
+            finally { isSearching.value = false }
         }
     }
 
-    suspend fun getUserById(userId: Int): UserResponse? {
-        return try {
-            val response = api.getUserById(userId)
-            if (response.isSuccessful) response.body() else null
-        } catch (e: Exception) { null }
-    }
+    suspend fun getUserById(userId: Int): UserResponse? = try {
+        val r = api.getUserById(userId); if (r.isSuccessful) r.body() else null
+    } catch (_: Exception) { null }
 
-    suspend fun getFriendStatus(targetId: Int): String {
-        return try {
-            val response = api.getFriendStatus(targetId)
-            if (response.isSuccessful) response.body()?.status ?: "none" else "none"
-        } catch (e: Exception) { "none" }
-    }
+    suspend fun getFriendStatus(targetId: Int): String = try {
+        val r = api.getFriendStatus(targetId); if (r.isSuccessful) r.body()?.status ?: "none" else "none"
+    } catch (_: Exception) { "none" }
 
-    // ── SOLICITUDES Y NOTIFICACIONES ─────────────────────
+    // ── AMIGOS ────────────────────────────────────────────
 
-    fun loadNotificationsData() {
+    fun loadFriendCount() {
         viewModelScope.launch {
             try {
-                val reqResp = api.getPendingRequests()
-                if (reqResp.isSuccessful) pendingRequests.value = reqResp.body() ?: emptyList()
+                val r = api.getFriendCount()
+                if (r.isSuccessful) friendCount.value = r.body()?.count ?: 0
+            } catch (_: Exception) {}
+        }
+    }
 
-                val notifResp = api.getNotifications()
-                if (notifResp.isSuccessful) {
-                    val list = notifResp.body() ?: emptyList()
-                    notifications.value = list
-                    unreadCount.value = list.count { !it.isRead }
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
+    fun loadFriendsList() {
+        viewModelScope.launch {
+            try {
+                val r = api.getFriends()
+                if (r.isSuccessful) friendsList.value = r.body() ?: emptyList()
+            } catch (_: Exception) {}
         }
     }
 
     fun sendFriendRequest(targetUserId: Int, onResult: (Boolean) -> Unit) {
         viewModelScope.launch {
             try {
-                val response = api.sendFriendRequest(FriendRequestDto(targetUserId))
-                onResult(response.isSuccessful || response.code() == 409)
-            } catch (e: Exception) { onResult(false) }
+                val r = api.sendFriendRequest(FriendRequestDto(targetUserId))
+                onResult(r.isSuccessful || r.code() == 409)
+            } catch (_: Exception) { onResult(false) }
         }
     }
 
     fun respondToFriendRequest(requestId: Int, accept: Boolean) {
         viewModelScope.launch {
+            try { api.respondToFriendRequest(RespondFriendRequest(requestId, accept)); loadNotificationsData(); loadFriendCount() }
+            catch (e: Exception) { e.printStackTrace() }
+        }
+    }
+
+    // ── NOTIFICACIONES ────────────────────────────────────
+
+    fun loadNotificationsData() {
+        viewModelScope.launch {
             try {
-                api.respondToFriendRequest(RespondFriendRequest(requestId, accept))
-                loadNotificationsData()
+                val rq = api.getPendingRequests()
+                if (rq.isSuccessful) pendingRequests.value = rq.body() ?: emptyList()
+                val rn = api.getNotifications()
+                if (rn.isSuccessful) {
+                    val list = rn.body() ?: emptyList()
+                    notifications.value = list
+                    unreadCount.value   = list.count { !it.isRead }
+                }
             } catch (e: Exception) { e.printStackTrace() }
         }
     }
@@ -325,15 +283,49 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 api.markNotificationRead(id)
-                notifications.value = notifications.value.map {
-                    if (it.id == id) it.copy(isRead = true) else it
-                }
-                unreadCount.value = notifications.value.count { !it.isRead }
+                notifications.value = notifications.value.map { if (it.id == id) it.copy(isRead = true) else it }
+                unreadCount.value   = notifications.value.count { !it.isRead }
             } catch (e: Exception) { e.printStackTrace() }
         }
     }
 
-    // ── POSTS ─────────────────────────────────────────────
+    // ── FEED + FOTOS MEZCLADAS ────────────────────────────
+
+    /** Carga el feed personal (usuario + amigos) desde la API */
+    fun loadFeed() {
+        viewModelScope.launch {
+            try {
+                val r = api.getFeed()
+                if (r.isSuccessful) apiFeed.value = r.body() ?: emptyList()
+            } catch (_: Exception) {}
+        }
+    }
+
+    /** Devuelve fotos mezcladas (usuario + amigos) para una canción */
+    suspend fun getMixedPhotos(trackId: String): List<PhotoResponse> {
+        mixedPhotosCache.value[trackId]?.let { return it }
+        return try {
+            val r = api.getMixedPhotos(trackId)
+            val photos = if (r.isSuccessful) r.body() ?: emptyList() else emptyList()
+            mixedPhotosCache.value = mixedPhotosCache.value + (trackId to photos)
+            photos
+        } catch (_: Exception) { emptyList() }
+    }
+
+    /** Invalida la caché de fotos para que se recarguen */
+    fun invalidateMixedCache(trackId: String? = null) {
+        mixedPhotosCache.value = if (trackId != null)
+            mixedPhotosCache.value - trackId
+        else emptyMap()
+    }
+
+    /** Devuelve canciones en común entre el usuario autenticado y targetUserId */
+    suspend fun getCommonSongs(targetUserId: Int): List<PostResponse> = try {
+        val r = api.getCommonSongs(targetUserId)
+        if (r.isSuccessful) r.body() ?: emptyList() else emptyList()
+    } catch (_: Exception) { emptyList() }
+
+    // ── POSTS LOCALES ─────────────────────────────────────
 
     fun createPost(
         trackId: String, trackName: String, artistName: String,
@@ -342,27 +334,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 val request = PostRequest(
-                    trackId = trackId, trackName = trackName,
-                    artistName = artistName, artworkUrl = artworkUrl,
-                    timestamp = System.currentTimeMillis(),
+                    trackId = trackId, trackName = trackName, artistName = artistName,
+                    artworkUrl = artworkUrl, timestamp = System.currentTimeMillis(),
                     photos = photoUris.map { uri ->
-                        PhotoRequest(
-                            photoUri = uri,
-                            userId = loggedUserId.value,
-                            username = loggedUsername.value,
-                            timestamp = System.currentTimeMillis()
-                        )
+                        PhotoRequest(uri, loggedUserId.value, loggedUsername.value, System.currentTimeMillis())
                     }
                 )
-                val response = api.createPost(request)
-                if (response.isSuccessful) {
+                val r = api.createPost(request)
+                if (r.isSuccessful) {
                     repo.createPost(trackId, trackName, artistName, artworkUrl, photoUris, loggedUserId.value, loggedUsername.value)
+                    invalidateMixedCache(trackId)
+                    loadFeed()
                 }
             } catch (e: Exception) { e.printStackTrace() }
         }
     }
 
-    fun getPhotosForSong(trackId: String) = repo.getPhotosForSong(trackId)
+    fun getPhotosForSong(trackId: String)  = repo.getPhotosForSong(trackId)
     suspend fun getSongPost(trackId: String) = repo.getSongPost(trackId)
 }
 
@@ -390,48 +378,41 @@ class MainActivity : ComponentActivity() {
 }
 
 // ══════════════════════════════════════════════════════════
-// APP — navegación principal
+// NAVEGACIÓN PRINCIPAL
 // ══════════════════════════════════════════════════════════
 
 @Composable
 fun NewsickApp(windowSize: WindowWidthSizeClass, viewModel: MainViewModel) {
     val navController = rememberNavController()
-    val navBackStackEntry by navController.currentBackStackEntryAsState()
-    val currentRoute = navBackStackEntry?.destination?.route
+    val currentRoute  = navController.currentBackStackEntryAsState().value?.destination?.route
 
-    // Cargar notificaciones al iniciar
-    LaunchedEffect(Unit) { viewModel.loadNotificationsData() }
-
-    val topLevelRoutes = listOf("social", "map", "profile")
+    LaunchedEffect(Unit) {
+        viewModel.loadNotificationsData()
+        viewModel.loadFriendCount()
+        viewModel.loadFeed()
+    }
 
     Scaffold(
         bottomBar = {
             NavigationBar {
                 NavigationBarItem(
-                    icon = { Icon(Icons.Default.Search, null) },
-                    label = { Text("Social") },
+                    icon = { Icon(Icons.Default.Search, null) }, label = { Text("Social") },
                     selected = currentRoute == "social",
                     onClick = {
-                        if (currentRoute == "social") viewModel.loadNotificationsData()
+                        if (currentRoute == "social") { viewModel.loadNotificationsData(); viewModel.loadFeed() }
                         else navController.navigate("social") { launchSingleTop = true; popUpTo("social") }
                     }
                 )
                 NavigationBarItem(
-                    icon = { Icon(Icons.Default.Place, null) },
-                    label = { Text("Mapa") },
+                    icon = { Icon(Icons.Default.Place, null) }, label = { Text("Mapa") },
                     selected = currentRoute == "map",
-                    onClick = {
-                        if (currentRoute != "map")
-                            navController.navigate("map") { launchSingleTop = true }
-                    }
+                    onClick = { if (currentRoute != "map") navController.navigate("map") { launchSingleTop = true } }
                 )
                 NavigationBarItem(
-                    icon = { Icon(Icons.Default.Person, null) },
-                    label = { Text("Perfil") },   // renombrado de "Yo"
+                    icon = { Icon(Icons.Default.Person, null) }, label = { Text("Perfil") },
                     selected = currentRoute == "profile",
                     onClick = {
-                        if (currentRoute == "profile") { /* ya estamos, no hacer nada */ }
-                        else navController.navigate("profile") { launchSingleTop = true; popUpTo("social") }
+                        if (currentRoute != "profile") navController.navigate("profile") { launchSingleTop = true; popUpTo("social") }
                     }
                 )
             }
@@ -441,46 +422,55 @@ fun NewsickApp(windowSize: WindowWidthSizeClass, viewModel: MainViewModel) {
             composable("social") {
                 SocialFeedScreen(
                     viewModel = viewModel,
-                    onSongClick = { navController.navigate("detail/$it") },
-                    onUploadClick = { navController.navigate("upload") },
+                    onSongClick        = { navController.navigate("detail/$it") },
+                    onUploadClick      = { navController.navigate("upload") },
                     onNotificationsClick = { navController.navigate("notifications") },
-                    onUserClick = { userId -> navController.navigate("userProfile/$userId") }
+                    onUserClick        = { userId -> navController.navigate("userProfile/$userId") }
                 )
             }
             composable("map") { MapScreen() }
             composable("profile") {
                 ProfileScreen(
-                    viewModel = viewModel,
+                    viewModel      = viewModel,
                     onSettingsClick = { navController.navigate("settings") },
-                    onSongClick = { navController.navigate("detail/$it") }
+                    onSongClick    = { navController.navigate("detail/$it") },
+                    onFriendsClick = { navController.navigate("friends") }
                 )
             }
-            composable("settings") { SettingsScreen(onLogout = { viewModel.logout() }) }
+            composable("settings") {
+                SettingsScreen(
+                    onBack   = { navController.popBackStack() },
+                    onLogout = { viewModel.logout() }
+                )
+            }
+            composable("friends") {
+                FriendsListScreen(
+                    viewModel    = viewModel,
+                    onBack       = { navController.popBackStack() },
+                    onUserClick  = { userId -> navController.navigate("userProfile/$userId") }
+                )
+            }
             composable("upload") {
                 PostUploadScreen(
-                    viewModel = viewModel,
+                    viewModel     = viewModel,
                     onPostCreated = { navController.popBackStack() },
-                    onBack = { navController.popBackStack() }
+                    onBack        = { navController.popBackStack() }
                 )
             }
             composable("detail/{trackId}") { backStack ->
                 val trackId = backStack.arguments?.getString("trackId") ?: return@composable
-                SongDetailScreen(trackId = trackId, viewModel = viewModel,
-                    onBack = { navController.popBackStack() })
+                SongDetailScreen(trackId = trackId, viewModel = viewModel, onBack = { navController.popBackStack() })
             }
             composable("userProfile/{userId}") { backStack ->
                 val userId = backStack.arguments?.getString("userId")?.toIntOrNull() ?: return@composable
-                UserProfileScreen(
-                    userId = userId,
-                    viewModel = viewModel,
-                    onBack = { navController.popBackStack() },
+                UserProfileScreen(userId = userId, viewModel = viewModel,
+                    onBack     = { navController.popBackStack() },
                     onSongClick = { navController.navigate("detail/$it") }
                 )
             }
             composable("notifications") {
-                NotificationsScreen(
-                    viewModel = viewModel,
-                    onBack = { navController.popBackStack() },
+                NotificationsScreen(viewModel = viewModel,
+                    onBack     = { navController.popBackStack() },
                     onUserClick = { userId -> navController.navigate("userProfile/$userId") }
                 )
             }
@@ -504,89 +494,49 @@ fun AuthScreen(viewModel: MainViewModel) {
     val authError     = viewModel.authError.value
 
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(
-            modifier = Modifier.padding(32.dp).fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Icon(
-                imageVector = if (needsUsername) Icons.Default.AccountCircle else Icons.Default.MusicNote,
-                contentDescription = null,
-                modifier = Modifier.size(80.dp),
-                tint = MaterialTheme.colorScheme.primary
-            )
+        Column(modifier = Modifier.padding(32.dp).fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+
+            Icon(imageVector = if (needsUsername) Icons.Default.AccountCircle else Icons.Default.MusicNote,
+                contentDescription = null, modifier = Modifier.size(80.dp), tint = MaterialTheme.colorScheme.primary)
             Spacer(Modifier.height(16.dp))
-            Text(
-                text = when {
-                    needsUsername -> "Configura tu perfil"
-                    isRegistering -> "Crea tu cuenta"
-                    else          -> "Bienvenido a Newsick"
-                },
-                style = MaterialTheme.typography.headlineMedium
-            )
+            Text(text = when { needsUsername -> "Configura tu perfil"; isRegistering -> "Crea tu cuenta"; else -> "Bienvenido a Newsick" },
+                style = MaterialTheme.typography.headlineMedium)
             Spacer(Modifier.height(32.dp))
 
             if (!needsUsername) {
-                OutlinedTextField(
-                    value = email, onValueChange = { email = it },
-                    label = { Text("Correo electrónico") }, modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email)
-                )
+                OutlinedTextField(value = email, onValueChange = { email = it }, label = { Text("Correo electrónico") },
+                    modifier = Modifier.fillMaxWidth(), singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email))
                 Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = password, onValueChange = { password = it },
-                    label = { Text("Contraseña") }, modifier = Modifier.fillMaxWidth(),
-                    visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                    singleLine = true
-                )
+                OutlinedTextField(value = password, onValueChange = { password = it }, label = { Text("Contraseña") },
+                    modifier = Modifier.fillMaxWidth(), visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), singleLine = true)
             } else {
-                Text(
-                    "Elige un nombre de usuario público para continuar.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(bottom = 16.dp)
-                )
-                OutlinedTextField(
-                    value = chosenUsername, onValueChange = { chosenUsername = it },
+                Text("Elige un nombre de usuario público para continuar.", style = MaterialTheme.typography.bodyMedium,
+                    textAlign = TextAlign.Center, modifier = Modifier.padding(bottom = 16.dp))
+                OutlinedTextField(value = chosenUsername, onValueChange = { chosenUsername = it },
                     label = { Text("Nombre de usuario") }, modifier = Modifier.fillMaxWidth(),
-                    singleLine = true, placeholder = { Text("@ejemplo") }
-                )
+                    singleLine = true, placeholder = { Text("@ejemplo") })
             }
 
-            authError?.let {
-                Spacer(Modifier.height(8.dp))
-                Text(it, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
-            }
-
+            authError?.let { Spacer(Modifier.height(8.dp)); Text(it, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center) }
             Spacer(Modifier.height(24.dp))
 
-            Button(
-                onClick = {
-                    when {
-                        needsUsername -> viewModel.performRegister(email, password, chosenUsername)
-                        isRegistering -> {
-                            if (email.contains("@") && password.length >= 6) viewModel.prepareRegister(email, password)
-                            else viewModel.authError.value = "Correo válido y mínimo 6 caracteres"
-                        }
-                        else -> viewModel.performLogin(email, password)
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-                enabled = !isLoading && (if (needsUsername) chosenUsername.isNotBlank() else true)
-            ) {
+            Button(onClick = {
+                when {
+                    needsUsername -> viewModel.performRegister(email, password, chosenUsername)
+                    isRegistering -> { if (email.contains("@") && password.length >= 6) viewModel.prepareRegister(email, password) else viewModel.authError.value = "Correo válido y mínimo 6 caracteres" }
+                    else -> viewModel.performLogin(email, password)
+                }
+            }, modifier = Modifier.fillMaxWidth(), enabled = !isLoading && (if (needsUsername) chosenUsername.isNotBlank() else true)) {
                 if (isLoading) CircularProgressIndicator(Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary)
                 else Text(when { needsUsername -> "Finalizar y Entrar"; isRegistering -> "Siguiente"; else -> "Iniciar Sesión" })
             }
 
             Spacer(Modifier.height(16.dp))
-
             if (!needsUsername) {
-                TextButton(onClick = {
-                    viewModel.isRegistering.value = !isRegistering
-                    viewModel.authError.value = null
-                }) {
+                TextButton(onClick = { viewModel.isRegistering.value = !isRegistering; viewModel.authError.value = null }) {
                     Text(if (isRegistering) "¿Ya tienes cuenta? Entra aquí" else "¿No tienes cuenta? Regístrate")
                 }
             } else {
@@ -597,56 +547,59 @@ fun AuthScreen(viewModel: MainViewModel) {
 }
 
 // ══════════════════════════════════════════════════════════
-// PANTALLA DE AJUSTES
+// PANTALLA DE AJUSTES — con botón de volver
 // ══════════════════════════════════════════════════════════
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(onLogout: () -> Unit) {
+fun SettingsScreen(onBack: () -> Unit, onLogout: () -> Unit) {
     val context = LocalContext.current
     val versionName = remember {
-        try { context.packageManager.getPackageInfo(context.packageName, 0).versionName }
-        catch (_: Exception) { "?" }
+        try { context.packageManager.getPackageInfo(context.packageName, 0).versionName } catch (_: Exception) { "?" }
     }
 
-    Column(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Text("Newsick", style = MaterialTheme.typography.headlineLarge, color = MaterialTheme.colorScheme.primary)
-        Spacer(Modifier.height(8.dp))
-        Text("Configuración y Feedback", style = MaterialTheme.typography.bodyLarge, textAlign = TextAlign.Center)
-        Spacer(Modifier.height(24.dp))
-
-        Button(onClick = {
-            val intent = Intent(Intent.ACTION_SENDTO).apply {
-                data = Uri.parse("mailto:")
-                putExtra(Intent.EXTRA_EMAIL, arrayOf("marcosqh17@gmail.com"))
-                putExtra(Intent.EXTRA_SUBJECT, "Feedback Newsick")
-                putExtra(Intent.EXTRA_TEXT, "Hola,\n\nFeedback:\n\n")
-            }
-            try { context.startActivity(intent) }
-            catch (_: ActivityNotFoundException) {
-                Toast.makeText(context, "No se encontró app de correo", Toast.LENGTH_SHORT).show()
-            }
-        }) {
-            Icon(Icons.Default.Email, null)
-            Spacer(Modifier.width(8.dp))
-            Text("Enviar Feedback")
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Configuración") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Volver")
+                    }
+                }
+            )
         }
+    ) { padding ->
+        Column(modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
 
-        Spacer(Modifier.height(16.dp))
+            Text("Newsick", style = MaterialTheme.typography.headlineLarge, color = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.height(8.dp))
+            Text("Configuración y Feedback", style = MaterialTheme.typography.bodyLarge, textAlign = TextAlign.Center)
+            Spacer(Modifier.height(24.dp))
 
-        OutlinedButton(
-            onClick = onLogout,
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
-        ) {
-            Icon(Icons.Default.ExitToApp, null)
-            Spacer(Modifier.width(8.dp))
-            Text("Cerrar Sesión")
+            Button(onClick = {
+                val intent = Intent(Intent.ACTION_SENDTO).apply {
+                    data = Uri.parse("mailto:")
+                    putExtra(Intent.EXTRA_EMAIL, arrayOf("marcosqh17@gmail.com"))
+                    putExtra(Intent.EXTRA_SUBJECT, "Feedback Newsick")
+                    putExtra(Intent.EXTRA_TEXT, "Hola,\n\nFeedback:\n\n")
+                }
+                try { context.startActivity(intent) }
+                catch (_: ActivityNotFoundException) { Toast.makeText(context, "No se encontró app de correo", Toast.LENGTH_SHORT).show() }
+            }) {
+                Icon(Icons.Default.Email, null); Spacer(Modifier.width(8.dp)); Text("Enviar Feedback")
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            OutlinedButton(onClick = onLogout,
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)) {
+                Icon(Icons.Default.ExitToApp, null); Spacer(Modifier.width(8.dp)); Text("Cerrar Sesión")
+            }
+
+            Spacer(Modifier.height(24.dp))
+            Text("v$versionName", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-
-        Spacer(Modifier.height(24.dp))
-        Text("v$versionName", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

@@ -2,8 +2,11 @@ package com.makro17.newsick
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.*
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
@@ -19,6 +22,7 @@ import coil.compose.AsyncImage
 // ══════════════════════════════════════════════════════════
 // PANTALLA DE PERFIL DE OTRO USUARIO
 // ══════════════════════════════════════════════════════════
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun UserProfileScreen(
@@ -27,46 +31,52 @@ fun UserProfileScreen(
     onBack: () -> Unit,
     onSongClick: (String) -> Unit
 ) {
-    var user          by remember { mutableStateOf<UserResponse?>(null) }
-    var posts         by remember { mutableStateOf<List<PostResponse>>(emptyList()) }
-    var friendStatus  by remember { mutableStateOf("loading") }
-    var isLoading     by remember { mutableStateOf(true) }
-    var requestSent   by remember { mutableStateOf(false) }
+    var user            by remember { mutableStateOf<UserResponse?>(null) }
+    var posts           by remember { mutableStateOf<List<PostResponse>>(emptyList()) }
+    var commonSongs     by remember { mutableStateOf<List<PostResponse>>(emptyList()) }
+    var friendStatus    by remember { mutableStateOf("loading") }
+    var isLoading       by remember { mutableStateOf(true) }
+    var requestSent     by remember { mutableStateOf(false) }
+    var showCommonSongs by remember { mutableStateOf(false) }
 
-    // Captura local para permitir Smart Cast de Kotlin
-    val currentUser = user
+    val isSelf = userId == viewModel.loggedUserId.value
 
-    // Cargar datos del usuario
     LaunchedEffect(userId) {
         isLoading = true
         user = viewModel.getUserById(userId)
         try {
-            val postsResp = NewsickRetrofit.api.getUserPosts(userId)
-            if (postsResp.isSuccessful) posts = postsResp.body() ?: emptyList()
+            val r = NewsickRetrofit.api.getUserPosts(userId)
+            if (r.isSuccessful) posts = r.body() ?: emptyList()
         } catch (_: Exception) {}
-        friendStatus = viewModel.getFriendStatus(userId)
+
+        if (!isSelf) {
+            commonSongs  = viewModel.getCommonSongs(userId)
+            friendStatus = viewModel.getFriendStatus(userId)
+        }
         isLoading = false
+    }
+
+    val currentUser = user
+
+    // Diálogo de canciones en común
+    if (showCommonSongs && commonSongs.isNotEmpty()) {
+        CommonSongsDialog(songs = commonSongs, onDismiss = { showCommonSongs = false }, onSongClick = { id ->
+            showCommonSongs = false; onSongClick(id)
+        })
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(text = currentUser?.username ?: "Perfil") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Atrás")
-                    }
-                }
+                title = { Text(currentUser?.username ?: "Perfil") },
+                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Atrás") } }
             )
         }
     ) { padding ->
         if (isLoading) {
-            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
-            }
+            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             return@Scaffold
         }
-
         if (currentUser == null) {
             Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
                 Text("Usuario no encontrado", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -74,59 +84,42 @@ fun UserProfileScreen(
             return@Scaffold
         }
 
-        Column(
-            modifier = Modifier
-                .padding(padding)
-                .padding(horizontal = 16.dp)
-                .fillMaxSize()
-        ) {
+        Column(modifier = Modifier.padding(padding).padding(horizontal = 16.dp).fillMaxSize()) {
+
             // ── Cabecera ───────────────────────────────────
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(vertical = 16.dp)
-            ) {
-                // Foto de perfil con validación de nulos
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 16.dp)) {
                 Box(modifier = Modifier.size(72.dp)) {
                     if (!currentUser.profilePhoto.isNullOrBlank()) {
-                        AsyncImage(
-                            model = currentUser.profilePhoto,
-                            contentDescription = null,
-                            modifier = Modifier.fillMaxSize().clip(CircleShape),
-                            contentScale = ContentScale.Crop
-                        )
+                        AsyncImage(model = currentUser.profilePhoto, contentDescription = null,
+                            modifier = Modifier.fillMaxSize().clip(CircleShape), contentScale = ContentScale.Crop)
                     } else {
-                        Icon(
-                            Icons.Default.AccountCircle, null,
-                            modifier = Modifier.fillMaxSize(),
-                            tint = MaterialTheme.colorScheme.primary
-                        )
+                        Icon(Icons.Default.AccountCircle, null,
+                            modifier = Modifier.fillMaxSize(), tint = MaterialTheme.colorScheme.primary)
                     }
                 }
-
                 Spacer(Modifier.width(16.dp))
-
                 Column(modifier = Modifier.weight(1f)) {
                     Text(currentUser.username, style = MaterialTheme.typography.titleLarge)
-
-                    // Bio con validación segura
                     if (!currentUser.bio.isNullOrBlank()) {
-                        Text(
-                            text = currentUser.bio,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        Text(currentUser.bio, style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-
-                    Text(
-                        "${posts.size} publicación(es)",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Text("${posts.size} publicación(es)", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
 
+            // ── Chip de canciones en común (visible siempre si hay) ──
+            if (!isSelf && commonSongs.isNotEmpty()) {
+                AssistChip(
+                    onClick = { showCommonSongs = true },
+                    label = { Text("${commonSongs.size} canción(es) en común") },
+                    leadingIcon = { Icon(Icons.Default.MusicNote, null, modifier = Modifier.size(16.dp)) },
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+            }
+
             // ── Botón de amistad ───────────────────────────
-            val isSelf = userId == viewModel.loggedUserId.value
             if (!isSelf) {
                 val effectiveStatus = if (requestSent) "pending_sent" else friendStatus
                 FriendActionButton(
@@ -137,16 +130,17 @@ fun UserProfileScreen(
                         }
                     }
                 )
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(12.dp))
             }
 
             HorizontalDivider()
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(12.dp))
 
-            Text("Publicaciones", style = MaterialTheme.typography.titleMedium)
+            Text("Publicaciones (${posts.size})", style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(8.dp))
 
             // ── Grid de publicaciones ──────────────────────
+            // Se ven las portadas (álbum), las fotos solo se ven en detalle si son amigos
             if (posts.isEmpty()) {
                 Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                     Text("Este usuario aún no ha publicado nada", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -167,84 +161,86 @@ fun UserProfileScreen(
     }
 }
 
+// ── Diálogo: lista de canciones en común ──────────────────
+
+@Composable
+private fun CommonSongsDialog(
+    songs: List<PostResponse>,
+    onDismiss: () -> Unit,
+    onSongClick: (String) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Canciones en común") },
+        text = {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(songs) { song ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onSongClick(song.trackId) }
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        AsyncImage(model = song.artworkUrl, contentDescription = null,
+                            modifier = Modifier.size(48.dp).clip(RoundedCornerShape(8.dp)),
+                            contentScale = ContentScale.Crop)
+                        Spacer(Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(song.trackName, style = MaterialTheme.typography.titleSmall, maxLines = 1)
+                            Text(song.artistName, style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                        }
+                        Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Cerrar") } }
+    )
+}
+
+// ── Botón dinámico de amistad ─────────────────────────────
+
 @Composable
 private fun FriendActionButton(status: String, onAddFriend: () -> Unit) {
     when (status) {
-        "friends" -> {
-            Button(
-                onClick = {},
-                enabled = false,
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(
-                    disabledContainerColor = MaterialTheme.colorScheme.secondaryContainer,
-                    disabledContentColor = MaterialTheme.colorScheme.onSecondaryContainer
-                )
-            ) {
-                Icon(Icons.Default.CheckCircle, null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Ya sois amigos")
-            }
+        "friends" -> Button(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.buttonColors(
+                disabledContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                disabledContentColor   = MaterialTheme.colorScheme.onSecondaryContainer
+            )) {
+            Icon(Icons.Default.CheckCircle, null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp)); Text("Ya sois amigos")
         }
-        "pending_sent" -> {
-            OutlinedButton(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth()) {
-                Icon(Icons.Default.HourglassEmpty, null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Solicitud enviada")
-            }
+        "pending_sent" -> OutlinedButton(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth()) {
+            Icon(Icons.Default.HourglassEmpty, null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp)); Text("Solicitud enviada")
         }
-        "pending_received" -> {
-            Button(onClick = {}, modifier = Modifier.fillMaxWidth()) {
-                Icon(Icons.Default.PersonAdd, null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Responder solicitud")
-            }
+        "loading" -> OutlinedButton(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth()) {
+            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
         }
-        "loading" -> {
-            OutlinedButton(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth()) {
-                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-            }
-        }
-        else -> { // "none"
-            Button(onClick = onAddFriend, modifier = Modifier.fillMaxWidth()) {
-                Icon(Icons.Default.PersonAdd, null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Añadir amigo")
-            }
+        else -> Button(onClick = onAddFriend, modifier = Modifier.fillMaxWidth()) {
+            Icon(Icons.Default.PersonAdd, null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp)); Text("Añadir amigo")
         }
     }
 }
 
+// ── Tarjeta de publicación (portada del álbum) ────────────
+
 @Composable
 private fun UserPostCard(post: PostResponse, onClick: () -> Unit) {
-    Card(
-        modifier = Modifier
-            .aspectRatio(1f)
-            .clickable { onClick() }
-    ) {
+    Card(modifier = Modifier.aspectRatio(1f).clickable { onClick() }) {
         Box(modifier = Modifier.fillMaxSize()) {
-            AsyncImage(
-                model = post.artworkUrl,
-                contentDescription = null,
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop
-            )
-            Surface(
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .fillMaxWidth(),
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f)
-            ) {
+            AsyncImage(model = post.artworkUrl, contentDescription = null,
+                modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            Surface(modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth(),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f)) {
                 Column(modifier = Modifier.padding(8.dp)) {
-                    Text(
-                        text = post.trackName,
-                        style = MaterialTheme.typography.labelMedium,
-                        maxLines = 1
-                    )
-                    Text(
-                        text = "${post.photoCount} foto(s)",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary
-                    )
+                    Text(post.trackName, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+                    Text("${post.photoCount} foto(s)", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary)
                 }
             }
         }
