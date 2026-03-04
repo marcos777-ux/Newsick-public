@@ -3,6 +3,7 @@ package com.makro17.newsick
 import android.content.Context
 import androidx.room.*
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 
 // ══════════════════════════════════════════════════════════
 // 1. ENTIDADES
@@ -121,6 +122,10 @@ interface SongPostDao {
     // ✅ NUEVO: Borrar canción por track_id
     @Query("DELETE FROM song_posts WHERE track_id = :trackId")
     suspend fun deleteByTrackId(trackId: String): Int
+
+    // ✅ NUEVO: Borrar fotos por track_id
+    @Query("DELETE FROM post_photos WHERE track_id = :trackId")
+    suspend fun deletePhotosByTrackId(trackId: String): Int
 }
 
 @Dao
@@ -231,9 +236,17 @@ class NewsickRepository(private val db: NewsickDatabase) {
     // NUEVO: Búsqueda de usuarios
     suspend fun searchUsers(query: String) = db.userDao().searchUsers(query)
 
-    // ✅ Borrar canciones sin fotos
-    suspend fun cleanupEmptySongs() {
-        // Esta query borra song_posts que no tienen ninguna foto asociada
-        db.songPostDao().deleteEmptySongs()
+    suspend fun cleanupEmptySongs(userId: Int) {
+        // Obtener todas las canciones del usuario en Room
+        val allSongs = db.songPostDao().getActiveSongsByUser(userId).first()
+
+        // Verificar cada canción
+        allSongs.forEach { song ->
+            val photos = db.postPhotoDao().getPhotosForSong(song.trackId).first()
+            if (photos.isEmpty()) {
+                // Si no tiene fotos, borrar de Room
+                db.songPostDao().deleteByTrackId(song.trackId)
+            }
+        }
     }
 }

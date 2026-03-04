@@ -82,12 +82,10 @@ fun SongDetailScreen(
 
     // Confirmación de borrado
     photoToDelete?.let { p ->
-        // ── En el AlertDialog de confirmación ───────────────────
         AlertDialog(
             onDismissRequest = { photoToDelete = null },
             title   = { Text("Eliminar foto") },
-            text    = { Text("¿Seguro que quieres eliminar esta foto?") },
-            // En el AlertDialog de confirmación
+            text    = { Text("¿Seguro que quieres eliminar esta foto? No se puede deshacer.") },
             confirmButton = {
                 Button(
                     onClick = {
@@ -99,7 +97,7 @@ fun SongDetailScreen(
                                     mediaPlayer?.stop()
                                     mediaPlayer?.release()
                                     mediaPlayer = null
-                                    onBack()  // ← Volver al perfil (se refrescará solo)
+                                    onBack()  // ← Volver al perfil
                                 }
                             }
                         }

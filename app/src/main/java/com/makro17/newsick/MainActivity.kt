@@ -372,13 +372,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     // ✅ 1. Borrar foto de Room localmente
                     db.postPhotoDao().deleteById(photoId)
 
-                    // ✅ 2. Limpiar canciones sin fotos (importante!)
-                    cleanupEmptySongsFromRoom()
+                    // ✅ 2. Limpiar canciones sin fotos (IMPORTANTE!)
+                    if (loggedUserId.value > 0) {
+                        repo.cleanupEmptySongs(loggedUserId.value)
+                    }
 
-                    // ✅ 3. Invalidar caché de fotos mezcladas
+                    // ✅ 3. Invalidar cachés
                     invalidateMixedCache()
-
-                    // ✅ 4. Recargar feed
                     loadFeed()
 
                     onResult(true)
