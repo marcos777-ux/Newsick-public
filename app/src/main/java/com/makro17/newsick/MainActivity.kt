@@ -372,10 +372,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     // ✅ 1. Borrar foto de Room localmente
                     db.postPhotoDao().deleteById(photoId)
 
-                    // ✅ 2. Verificar si queda alguna foto para esa canción
-                    // Obtener el track_id de la foto antes de borrarla (necesitamos guardarlo)
-                    // Por simplicidad, limpiamos canciones sin fotos
-                    invalidateMySongsCache()
+                    // ✅ 2. Limpiar canciones sin fotos (importante!)
+                    cleanupEmptySongsFromRoom()
 
                     // ✅ 3. Invalidar caché de fotos mezcladas
                     invalidateMixedCache()
@@ -388,6 +386,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: Exception) {
                 e.printStackTrace()
                 onResult(false)
+            }
+        }
+    }
+
+    // ✅ NUEVA FUNCIÓN: Limpiar canciones sin fotos de Room
+    private suspend fun cleanupEmptySongsFromRoom() {
+        // Obtener todas las canciones de Room
+        val allSongs = db.songPostDao().getActiveSongs().first()
+
+        // Verificar cada canción
+        allSongs.forEach { song ->
+            val photos = db.postPhotoDao().getPhotosForSong(song.trackId).first()
+            if (photos.isEmpty()) {
+                // Si no tiene fotos, borrar de Room
+                // Necesitamos agregar este método al DAO (ver paso 2)
+                db.songPostDao().deleteByTrackId(song.trackId)
             }
         }
     }

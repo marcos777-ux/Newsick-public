@@ -111,16 +111,16 @@ interface SongPostDao {
     @Query("SELECT * FROM song_posts WHERE track_id = :trackId LIMIT 1")
     suspend fun getByTrackId(trackId: String): SongPostEntity?
 
-    // ✅ Eliminar canción por trackId
-    @Query("DELETE FROM song_posts WHERE track_id = :trackId")
-    suspend fun deleteByTrackId(trackId: String): Int
-
     // ✅ NUEVO: Borrar canciones sin fotos
     @Query("""
         DELETE FROM song_posts 
         WHERE track_id NOT IN (SELECT DISTINCT track_id FROM post_photos)
     """)
     suspend fun deleteEmptySongs(): Int
+
+    // ✅ NUEVO: Borrar canción por track_id
+    @Query("DELETE FROM song_posts WHERE track_id = :trackId")
+    suspend fun deleteByTrackId(trackId: String): Int
 }
 
 @Dao

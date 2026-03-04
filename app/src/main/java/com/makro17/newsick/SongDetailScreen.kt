@@ -87,6 +87,7 @@ fun SongDetailScreen(
             onDismissRequest = { photoToDelete = null },
             title   = { Text("Eliminar foto") },
             text    = { Text("¿Seguro que quieres eliminar esta foto?") },
+            // En el AlertDialog de confirmación
             confirmButton = {
                 Button(
                     onClick = {
@@ -98,7 +99,7 @@ fun SongDetailScreen(
                                     mediaPlayer?.stop()
                                     mediaPlayer?.release()
                                     mediaPlayer = null
-                                    onBack()  // ← Volver al perfil
+                                    onBack()  // ← Volver al perfil (se refrescará solo)
                                 }
                             }
                         }
