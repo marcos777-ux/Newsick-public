@@ -114,6 +114,13 @@ interface SongPostDao {
     // ✅ Eliminar canción por trackId
     @Query("DELETE FROM song_posts WHERE track_id = :trackId")
     suspend fun deleteByTrackId(trackId: String): Int
+
+    // ✅ NUEVO: Borrar canciones sin fotos
+    @Query("""
+        DELETE FROM song_posts 
+        WHERE track_id NOT IN (SELECT DISTINCT track_id FROM post_photos)
+    """)
+    suspend fun deleteEmptySongs(): Int
 }
 
 @Dao
@@ -181,6 +188,7 @@ class NewsickRepository(private val db: NewsickDatabase) {
         return db.userDao().getById(id.toInt())
     }
 
+
     fun getCollections() = db.friendCollectionDao().getAll()
 
     suspend fun addCollection(songTitle: String, friends: List<String>) {
@@ -222,4 +230,10 @@ class NewsickRepository(private val db: NewsickDatabase) {
 
     // NUEVO: Búsqueda de usuarios
     suspend fun searchUsers(query: String) = db.userDao().searchUsers(query)
+
+    // ✅ Borrar canciones sin fotos
+    suspend fun cleanupEmptySongs() {
+        // Esta query borra song_posts que no tienen ninguna foto asociada
+        db.songPostDao().deleteEmptySongs()
+    }
 }

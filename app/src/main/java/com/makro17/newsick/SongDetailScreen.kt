@@ -93,7 +93,7 @@ fun SongDetailScreen(
                         viewModel.deletePhoto(p.id) { ok ->
                             if (ok) {
                                 photos = photos.filter { it.id != p.id }
-                                // ✅ Si no quedan fotos, volver atrás (la canción se eliminó)
+                                // ✅ Si no quedan fotos, volver atrás automáticamente
                                 if (photos.isEmpty()) {
                                     mediaPlayer?.stop()
                                     mediaPlayer?.release()
@@ -104,9 +104,7 @@ fun SongDetailScreen(
                         }
                         photoToDelete = null
                     },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error
-                    )
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                 ) { Text("Eliminar") }
             },
             dismissButton = {

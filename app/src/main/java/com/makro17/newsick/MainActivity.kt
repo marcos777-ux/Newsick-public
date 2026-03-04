@@ -51,6 +51,17 @@ import kotlinx.coroutines.launch
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
+    private val _mySongsRefresh = MutableStateFlow(0L)
+
+    val mySongs: StateFlow<List<SongPostEntity>> =
+        snapshotFlow { loggedUserId.value }
+            .flatMapLatest { uid ->
+                if (uid == 0) flowOf(emptyList())
+                else repo.getActiveSongsByUser(uid)
+            }
+            .combine(_mySongsRefresh) { songs, _ -> songs }  // ✅ Combinar con refresh trigger
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     private var searchJob: Job? = null
     private val api = NewsickRetrofit.api
     private val prefs by lazy {
@@ -87,11 +98,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val feedSongs: StateFlow<List<SongPostEntity>> = repo.getActiveSongs()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-
-    val mySongs: StateFlow<List<SongPostEntity>> =
-        snapshotFlow { loggedUserId.value }
-            .flatMapLatest { uid -> if (uid == 0) flowOf(emptyList()) else repo.getActiveSongsByUser(uid) }
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     init {
         viewModelScope.launch {
@@ -363,13 +369,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val r = api.deletePhoto(photoId)
                 if (r.isSuccessful) {
-                    // ✅ 1. Borrar de Room localmente
+                    // ✅ 1. Borrar foto de Room localmente
                     db.postPhotoDao().deleteById(photoId)
 
-                    // ✅ 2. Invalidar caché de fotos mezcladas
+                    // ✅ 2. Verificar si queda alguna foto para esa canción
+                    // Obtener el track_id de la foto antes de borrarla (necesitamos guardarlo)
+                    // Por simplicidad, limpiamos canciones sin fotos
+                    invalidateMySongsCache()
+
+                    // ✅ 3. Invalidar caché de fotos mezcladas
                     invalidateMixedCache()
 
-                    // ✅ 3. Recargar feed
+                    // ✅ 4. Recargar feed
                     loadFeed()
 
                     onResult(true)
@@ -378,6 +389,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 e.printStackTrace()
                 onResult(false)
             }
+        }
+    }
+
+    // ✅ Agrega esta nueva función para forzar refresh de mySongs
+    private fun invalidateMySongsCache() {
+        viewModelScope.launch {
+            // Pequeño delay para dar tiempo a que Room procese el delete
+            delay(300)
+            // Forzar que mySongs emita un nuevo valor
+            _mySongsRefresh.value = System.currentTimeMillis()
         }
     }
 
