@@ -82,19 +82,31 @@ fun SongDetailScreen(
 
     // Confirmación de borrado
     photoToDelete?.let { p ->
+        // ── En el AlertDialog de confirmación ───────────────────
         AlertDialog(
             onDismissRequest = { photoToDelete = null },
             title   = { Text("Eliminar foto") },
-            text    = { Text("¿Seguro que quieres eliminar esta foto? No se puede deshacer.") },
+            text    = { Text("¿Seguro que quieres eliminar esta foto?") },
             confirmButton = {
                 Button(
                     onClick = {
                         viewModel.deletePhoto(p.id) { ok ->
-                            if (ok) photos = photos.filter { it.id != p.id }
+                            if (ok) {
+                                photos = photos.filter { it.id != p.id }
+                                // ✅ Si no quedan fotos, volver atrás (la canción se eliminó)
+                                if (photos.isEmpty()) {
+                                    mediaPlayer?.stop()
+                                    mediaPlayer?.release()
+                                    mediaPlayer = null
+                                    onBack()  // ← Volver al perfil
+                                }
+                            }
                         }
                         photoToDelete = null
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
+                    )
                 ) { Text("Eliminar") }
             },
             dismissButton = {

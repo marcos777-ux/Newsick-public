@@ -85,18 +85,35 @@ interface FriendCollectionDao {
 
 @Dao
 interface SongPostDao {
-    // JOIN en lugar de subquery — Room valida mejor las referencias entre tablas
-    @Query("SELECT DISTINCT sp.* FROM song_posts sp INNER JOIN post_photos pp ON sp.track_id = pp.track_id ORDER BY sp.timestamp DESC")
+
+    // ✅ Obtener todas las canciones activas (con al menos 1 foto)
+    @Query("""
+        SELECT DISTINCT sp.* FROM song_posts sp 
+        INNER JOIN post_photos pp ON sp.track_id = pp.track_id 
+        ORDER BY sp.timestamp DESC
+    """)
     fun getActiveSongs(): Flow<List<SongPostEntity>>
 
-    @Query("SELECT DISTINCT sp.* FROM song_posts sp INNER JOIN post_photos pp ON sp.track_id = pp.track_id WHERE pp.user_id = :userId ORDER BY sp.timestamp DESC")
+    // ✅ Obtener canciones de un usuario específico
+    @Query("""
+        SELECT DISTINCT sp.* FROM song_posts sp 
+        INNER JOIN post_photos pp ON sp.track_id = pp.track_id 
+        WHERE pp.user_id = :userId 
+        ORDER BY sp.timestamp DESC
+    """)
     fun getActiveSongsByUser(userId: Int): Flow<List<SongPostEntity>>
 
+    // ✅ Insertar canción (ignorar si ya existe)
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertOrIgnore(post: SongPostEntity): Long
 
+    // ✅ Obtener canción por trackId
     @Query("SELECT * FROM song_posts WHERE track_id = :trackId LIMIT 1")
     suspend fun getByTrackId(trackId: String): SongPostEntity?
+
+    // ✅ Eliminar canción por trackId
+    @Query("DELETE FROM song_posts WHERE track_id = :trackId")
+    suspend fun deleteByTrackId(trackId: String): Int
 }
 
 @Dao

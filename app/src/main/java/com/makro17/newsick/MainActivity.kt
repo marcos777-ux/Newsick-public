@@ -358,17 +358,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     ) {
         viewModelScope.launch { createPostAsync(trackId, trackName, artistName, artworkUrl, photoUris) }
     }
-
     fun deletePhoto(photoId: Int, onResult: (Boolean) -> Unit) {
         viewModelScope.launch {
             try {
                 val r = api.deletePhoto(photoId)
                 if (r.isSuccessful) {
+                    // ✅ 1. Borrar de Room localmente
+                    db.postPhotoDao().deleteById(photoId)
+
+                    // ✅ 2. Invalidar caché de fotos mezcladas
                     invalidateMixedCache()
+
+                    // ✅ 3. Recargar feed
                     loadFeed()
+
                     onResult(true)
                 } else onResult(false)
-            } catch (e: Exception) { e.printStackTrace(); onResult(false) }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                onResult(false)
+            }
         }
     }
 
