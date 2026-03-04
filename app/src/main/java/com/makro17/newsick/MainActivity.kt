@@ -38,6 +38,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -47,7 +48,7 @@ import kotlinx.coroutines.launch
 // ══════════════════════════════════════════════════════════
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
-
+    private var searchJob: Job? = null
     private val api = NewsickRetrofit.api
 
     private val prefs by lazy {
@@ -246,20 +247,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // ── BÚSQUEDA DE USUARIOS ──────────────────────────────
 
     fun searchUsers(query: String) {
-        viewModelScope.launch {
-            if (query.isBlank()) {
-                searchResults.value = emptyList()
-                isSearching.value = false
-                return@launch
-            }
+        searchJob?.cancel()
+        if (query.isBlank()) {
+            searchResults.value = emptyList()
+            isSearching.value = false
+            return
+        }
+
+        searchJob = viewModelScope.launch {
+            delay(300) // ⏳ Espera 300ms antes de disparar la petición
             isSearching.value = true
             try {
                 val response = api.searchUsers(SearchUsersRequest(query))
+                // Manejamos el éxito o fallo con seguridad
                 searchResults.value = if (response.isSuccessful) response.body() ?: emptyList() else emptyList()
             } catch (e: Exception) {
                 searchResults.value = emptyList()
+            } finally {
+                isSearching.value = false
             }
-            isSearching.value = false
         }
     }
 

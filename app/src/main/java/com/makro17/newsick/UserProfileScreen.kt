@@ -4,7 +4,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.*
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
@@ -20,7 +19,7 @@ import coil.compose.AsyncImage
 // ══════════════════════════════════════════════════════════
 // PANTALLA DE PERFIL DE OTRO USUARIO
 // ══════════════════════════════════════════════════════════
-
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun UserProfileScreen(
     userId: Int,
@@ -30,9 +29,12 @@ fun UserProfileScreen(
 ) {
     var user          by remember { mutableStateOf<UserResponse?>(null) }
     var posts         by remember { mutableStateOf<List<PostResponse>>(emptyList()) }
-    var friendStatus  by remember { mutableStateOf("loading") } // loading | none | pending_sent | pending_received | friends
+    var friendStatus  by remember { mutableStateOf("loading") }
     var isLoading     by remember { mutableStateOf(true) }
     var requestSent   by remember { mutableStateOf(false) }
+
+    // Captura local para permitir Smart Cast de Kotlin
+    val currentUser = user
 
     // Cargar datos del usuario
     LaunchedEffect(userId) {
@@ -48,29 +50,25 @@ fun UserProfileScreen(
 
     Scaffold(
         topBar = {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Atrás")
+            TopAppBar(
+                title = { Text(text = currentUser?.username ?: "Perfil") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Atrás")
+                    }
                 }
-                Text(
-                    text = user?.username ?: "Perfil",
-                    style = MaterialTheme.typography.titleLarge
-                )
-            }
+            )
         }
     ) { padding ->
         if (isLoading) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
             }
             return@Scaffold
         }
 
-        if (user == null) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        if (currentUser == null) {
+            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
                 Text("Usuario no encontrado", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             return@Scaffold
@@ -85,13 +83,13 @@ fun UserProfileScreen(
             // ── Cabecera ───────────────────────────────────
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(vertical = 8.dp)
+                modifier = Modifier.padding(vertical = 16.dp)
             ) {
-                // Foto de perfil
+                // Foto de perfil con validación de nulos
                 Box(modifier = Modifier.size(72.dp)) {
-                    if (!user!!.profilePhoto.isNullOrBlank()) {
+                    if (!currentUser.profilePhoto.isNullOrBlank()) {
                         AsyncImage(
-                            model = user!!.profilePhoto,
+                            model = currentUser.profilePhoto,
                             contentDescription = null,
                             modifier = Modifier.fillMaxSize().clip(CircleShape),
                             contentScale = ContentScale.Crop
@@ -108,14 +106,17 @@ fun UserProfileScreen(
                 Spacer(Modifier.width(16.dp))
 
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(user!!.username, style = MaterialTheme.typography.titleLarge)
-                    if (user!!.bio.isNotBlank()) {
+                    Text(currentUser.username, style = MaterialTheme.typography.titleLarge)
+
+                    // Bio con validación segura
+                    if (!currentUser.bio.isNullOrBlank()) {
                         Text(
-                            user!!.bio,
+                            text = currentUser.bio,
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
+
                     Text(
                         "${posts.size} publicación(es)",
                         style = MaterialTheme.typography.labelSmall,
@@ -136,18 +137,18 @@ fun UserProfileScreen(
                         }
                     }
                 )
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(16.dp))
             }
 
             HorizontalDivider()
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(16.dp))
 
-            Text("Publicaciones (${posts.size})", style = MaterialTheme.typography.titleMedium)
+            Text("Publicaciones", style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(8.dp))
 
             // ── Grid de publicaciones ──────────────────────
             if (posts.isEmpty()) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                     Text("Este usuario aún no ha publicado nada", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             } else {
@@ -155,7 +156,7 @@ fun UserProfileScreen(
                     columns = GridCells.Fixed(2),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier.weight(1f)
                 ) {
                     items(posts) { post ->
                         UserPostCard(post = post, onClick = { onSongClick(post.trackId) })
@@ -200,7 +201,7 @@ private fun FriendActionButton(status: String, onAddFriend: () -> Unit) {
         }
         "loading" -> {
             OutlinedButton(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth()) {
-                CircularProgressIndicator(modifier = Modifier.size(16.dp))
+                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
             }
         }
         else -> { // "none"
@@ -216,7 +217,9 @@ private fun FriendActionButton(status: String, onAddFriend: () -> Unit) {
 @Composable
 private fun UserPostCard(post: PostResponse, onClick: () -> Unit) {
     Card(
-        modifier = Modifier.aspectRatio(1f).clickable { onClick() }
+        modifier = Modifier
+            .aspectRatio(1f)
+            .clickable { onClick() }
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
             AsyncImage(
@@ -226,13 +229,19 @@ private fun UserPostCard(post: PostResponse, onClick: () -> Unit) {
                 contentScale = ContentScale.Crop
             )
             Surface(
-                modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth(),
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .fillMaxWidth(),
                 color = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f)
             ) {
                 Column(modifier = Modifier.padding(8.dp)) {
-                    Text(post.trackName, style = MaterialTheme.typography.labelMedium, maxLines = 1)
                     Text(
-                        "${post.photoCount} foto(s)",
+                        text = post.trackName,
+                        style = MaterialTheme.typography.labelMedium,
+                        maxLines = 1
+                    )
+                    Text(
+                        text = "${post.photoCount} foto(s)",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary
                     )
