@@ -19,3 +19,24 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# Retrofit + Gson
+-keepattributes Signature
+-keepattributes *Annotation*
+-keep class retrofit2.** { *; }
+-keep class com.google.gson.** { *; }
+-keepclassmembers class * {
+    @retrofit2.http.* <methods>;
+}
+
+# Modelos de datos (necesario para que Gson los deserialice)
+-keep class com.makro17.newsick.**Request { *; }
+-keep class com.makro17.newsick.**Response { *; }
+
+# Room
+-keep class * extends androidx.room.RoomDatabase
+-keep @androidx.room.Entity class *
+-keep @androidx.room.Dao interface *
+
+# Coil
+-keep class coil.** { *; }
