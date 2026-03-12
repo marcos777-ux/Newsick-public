@@ -2,6 +2,7 @@ package com.makro17.newsick
 
 import android.content.Context
 import android.content.Intent
+import android.media.MediaPlayer
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -9,7 +10,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.grid.*
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -36,7 +36,7 @@ import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.toRequestBody
 
 // ══════════════════════════════════════════════════════════
-// Sube foto de perfil al servidor y devuelve la URL pública
+// Sube foto de perfil al servidor
 // ══════════════════════════════════════════════════════════
 
 private suspend fun uploadProfilePhoto(context: Context, uri: Uri): String? =
@@ -64,7 +64,8 @@ fun ProfileScreen(
     viewModel: MainViewModel,
     onSettingsClick: () -> Unit,
     onSongClick: (String) -> Unit,
-    onFriendsClick: () -> Unit
+    onFriendsClick: () -> Unit,
+    onUploadClick: () -> Unit = {}
 ) {
     var showEditDialog  by remember { mutableStateOf(false) }
     val mySongs         by viewModel.mySongs.collectAsState()
@@ -72,8 +73,8 @@ fun ProfileScreen(
     var selectedTab     by remember { mutableIntStateOf(0) }
     var recommendations by remember { mutableStateOf<List<RecommendationResponse>>(emptyList()) }
     var isRefreshing    by remember { mutableStateOf(false) }
+    var selectedRec     by remember { mutableStateOf<RecommendationResponse?>(null) }
     val scope           = rememberCoroutineScope()
-    val context         = LocalContext.current
 
     val username     = viewModel.loggedUsername.value
     val bio          = viewModel.loggedBio.value
@@ -93,6 +94,26 @@ fun ProfileScreen(
 
     LaunchedEffect(Unit) { refresh() }
 
+    // ── BottomSheet de detalle de recomendación ────────────
+    selectedRec?.let { rec ->
+        RecommendationDetailSheet(
+            rec       = rec,
+            viewModel = viewModel,
+            onDismiss = { selectedRec = null },
+            onPublishClick = {
+                viewModel.pendingUploadTrack.value = PendingUploadTrack(
+                    trackId    = rec.trackId,
+                    trackName  = rec.trackName,
+                    artistName = rec.artistName,
+                    artworkUrl = rec.artworkUrl,
+                    previewUrl = rec.previewUrl
+                )
+                selectedRec = null
+                onUploadClick()
+            }
+        )
+    }
+
     Scaffold(
         topBar = {
             Row(
@@ -101,8 +122,14 @@ fun ProfileScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text("Perfil", style = MaterialTheme.typography.headlineMedium)
-                IconButton(onClick = onSettingsClick) {
-                    Icon(Icons.Default.Settings, "Configuración", modifier = Modifier.size(28.dp))
+                Row {
+                    // Botón amigos
+                    IconButton(onClick = onFriendsClick) {
+                        Icon(Icons.Default.Group, "Amigos")
+                    }
+                    IconButton(onClick = onSettingsClick) {
+                        Icon(Icons.Default.Settings, "Configuración")
+                    }
                 }
             }
         }
@@ -113,9 +140,8 @@ fun ProfileScreen(
             modifier     = Modifier.padding(padding).fillMaxSize()
         ) {
             LazyColumn(
-                modifier            = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(0.dp)
+                modifier       = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp)
             ) {
                 // ── Cabecera ───────────────────────────────
                 item {
@@ -152,8 +178,7 @@ fun ProfileScreen(
                     AssistChip(
                         onClick = onFriendsClick,
                         label = { Text("$friendCount amigo${if (friendCount != 1) "s" else ""}") },
-                        leadingIcon = { Icon(Icons.Default.Group, null, modifier = Modifier.size(16.dp)) },
-                        modifier = Modifier.wrapContentWidth()
+                        leadingIcon = { Icon(Icons.Default.Group, null, modifier = Modifier.size(16.dp)) }
                     )
                     Spacer(Modifier.height(8.dp))
                     HorizontalDivider()
@@ -180,13 +205,12 @@ fun ProfileScreen(
                     Spacer(Modifier.height(8.dp))
                 }
 
-                // ── Contenido de la pestaña activa ─────────
+                // ── Contenido de la pestaña ────────────────
                 when (selectedTab) {
                     0 -> {
                         if (mySongs.isEmpty()) {
                             item {
-                                Box(Modifier.fillMaxWidth().padding(top = 64.dp),
-                                    Alignment.Center) {
+                                Box(Modifier.fillMaxWidth().padding(top = 48.dp), Alignment.Center) {
                                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                         Icon(Icons.Default.MusicNote, null,
                                             modifier = Modifier.size(56.dp),
@@ -204,13 +228,12 @@ fun ProfileScreen(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 Spacer(Modifier.height(4.dp))
                             }
-                            // Grid de 2 columnas simulado con items de 2 en 2
                             items(mySongs.chunked(2)) { row ->
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp),
                                     modifier = Modifier.fillMaxWidth()) {
                                     row.forEach { song ->
-                                        Box(modifier = Modifier.weight(1f)) {
-                                            MySongCard(song = song, onClick = { onSongClick(song.trackId) })
+                                        Box(Modifier.weight(1f)) {
+                                            MySongCard(song, onClick = { onSongClick(song.trackId) })
                                         }
                                     }
                                     if (row.size == 1) Spacer(Modifier.weight(1f))
@@ -222,7 +245,7 @@ fun ProfileScreen(
                     1 -> {
                         if (recommendations.isEmpty()) {
                             item {
-                                Box(Modifier.fillMaxWidth().padding(top = 64.dp), Alignment.Center) {
+                                Box(Modifier.fillMaxWidth().padding(top = 48.dp), Alignment.Center) {
                                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                         Icon(Icons.Default.Recommend, null,
                                             modifier = Modifier.size(56.dp),
@@ -235,16 +258,20 @@ fun ProfileScreen(
                             }
                         } else {
                             items(recommendations) { rec ->
-                                RecommendationCard(rec = rec, onListened = {
-                                    scope.launch {
-                                        try {
-                                            val r = NewsickRetrofit.api.markListened(rec.trackId)
-                                            if (r.isSuccessful) {
-                                                recommendations = recommendations.filter { it.trackId != rec.trackId }
-                                            }
-                                        } catch (_: Exception) {}
+                                RecommendationCard(
+                                    rec = rec,
+                                    onClick = { selectedRec = rec },
+                                    onListened = {
+                                        scope.launch {
+                                            try {
+                                                val r = NewsickRetrofit.api.markListened(rec.trackId)
+                                                if (r.isSuccessful) {
+                                                    recommendations = recommendations.filter { it.trackId != rec.trackId }
+                                                }
+                                            } catch (_: Exception) {}
+                                        }
                                     }
-                                })
+                                )
                                 Spacer(Modifier.height(8.dp))
                             }
                         }
@@ -262,19 +289,190 @@ fun ProfileScreen(
             email               = viewModel.loggedEmail.value,
             onDismiss           = { showEditDialog = false },
             onSave              = { u, b, p ->
-                viewModel.updateProfile(u, b, p) { success, errorMsg ->
-                    if (!success && errorMsg != null) {
-                        // El error se muestra dentro del diálogo — aquí simplemente lo cerramos si tuvo éxito
-                    }
-                }
+                viewModel.updateProfile(u, b, p) { _, _ -> }
                 showEditDialog = false
             },
-            onDeleteAccount     = { password -> viewModel.deleteAccount(password) {}; showEditDialog = false }
+            onDeleteAccount = { password -> viewModel.deleteAccount(password) {}; showEditDialog = false }
         )
     }
 }
 
-// ── Tarjeta de canción propia ─────────────────────────────
+// ══════════════════════════════════════════════════════════
+// TARJETA DE RECOMENDACIÓN — fotos de quienes la recomiendan
+// Tick directo para marcar escuchada · Pulsar → abre detalle
+// ══════════════════════════════════════════════════════════
+
+@Composable
+fun RecommendationCard(
+    rec: RecommendationResponse,
+    onClick: () -> Unit,
+    onListened: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth().clickable { onClick() }
+    ) {
+        Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            AsyncImage(model = rec.artworkUrl, contentDescription = null,
+                modifier = Modifier.size(60.dp).clip(RoundedCornerShape(8.dp)),
+                contentScale = ContentScale.Crop)
+            Column(modifier = Modifier.weight(1f)) {
+                Text(rec.trackName, style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(rec.artistName, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.height(6.dp))
+                // Fotos de perfil de quienes recomiendan + contador
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(horizontalArrangement = Arrangement.spacedBy((-6).dp)) {
+                        rec.recommendedBy.take(3).forEach { r ->
+                            val url = NewsickRetrofit.absoluteUrl(r.profilePhoto)
+                            Box(modifier = Modifier.size(20.dp)
+                                .clip(CircleShape)) {
+                                if (url.isNotBlank()) {
+                                    AsyncImage(model = url, contentDescription = r.username,
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentScale = ContentScale.Crop)
+                                } else {
+                                    Icon(Icons.Default.AccountCircle, null,
+                                        modifier = Modifier.fillMaxSize(),
+                                        tint = MaterialTheme.colorScheme.primary)
+                                }
+                            }
+                        }
+                    }
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        if (rec.totalCount == 1) "1" else "${rec.totalCount}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+            // Botón tick — marcar como escuchada directamente
+            IconButton(onClick = { onListened() }) {
+                Icon(Icons.Default.Check, contentDescription = "Ya la escuché",
+                    tint = MaterialTheme.colorScheme.primary)
+            }
+        }
+    }
+}
+
+// ══════════════════════════════════════════════════════════
+// BOTTOM SHEET DE DETALLE DE RECOMENDACIÓN
+// Canción + preview de audio + publicar rápido + marcar escuchada
+// ══════════════════════════════════════════════════════════
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun RecommendationDetailSheet(
+    rec: RecommendationResponse,
+    viewModel: MainViewModel,
+    onDismiss: () -> Unit,
+    onPublishClick: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var isPlaying  by remember { mutableStateOf(false) }
+    var mediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
+
+    DisposableEffect(Unit) {
+        onDispose { mediaPlayer?.release(); mediaPlayer = null }
+    }
+
+    fun togglePreview() {
+        val previewUrl = rec.previewUrl ?: return
+        if (isPlaying) {
+            mediaPlayer?.stop(); mediaPlayer?.release(); mediaPlayer = null; isPlaying = false
+        } else {
+            try {
+                val mp = MediaPlayer()
+                mp.setDataSource(previewUrl)
+                mp.setOnCompletionListener { isPlaying = false }
+                mp.prepareAsync()
+                mp.setOnPreparedListener { mp.start(); isPlaying = true }
+                mediaPlayer = mp
+            } catch (_: Exception) {}
+        }
+    }
+
+    ModalBottomSheet(onDismissRequest = { mediaPlayer?.release(); mediaPlayer = null; onDismiss() },
+        sheetState = sheetState) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // Quienes recomiendan — fotos de perfil + texto
+            Row(verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center) {
+                Row(horizontalArrangement = Arrangement.spacedBy((-6).dp)) {
+                    rec.recommendedBy.take(3).forEach { r ->
+                        val url = NewsickRetrofit.absoluteUrl(r.profilePhoto)
+                        Box(modifier = Modifier.size(24.dp).clip(CircleShape)) {
+                            if (url.isNotBlank()) {
+                                AsyncImage(model = url, contentDescription = r.username,
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop)
+                            } else {
+                                Icon(Icons.Default.AccountCircle, null,
+                                    modifier = Modifier.fillMaxSize(),
+                                    tint = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    if (rec.totalCount == 1) "${rec.recommendedBy.firstOrNull()?.username} te recomienda:"
+                    else "${rec.totalCount} amigos te recomiendan:",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Spacer(Modifier.height(16.dp))
+
+            // Artwork grande
+            AsyncImage(model = rec.artworkUrl, contentDescription = null,
+                modifier = Modifier.size(160.dp).clip(RoundedCornerShape(12.dp)),
+                contentScale = ContentScale.Crop)
+            Spacer(Modifier.height(12.dp))
+
+            // Nombre y artista
+            Text(rec.trackName, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text(rec.artistName, style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+            Spacer(Modifier.height(20.dp))
+
+            // Botón preview de audio
+            if (!rec.previewUrl.isNullOrBlank()) {
+                OutlinedButton(onClick = { togglePreview() }, modifier = Modifier.fillMaxWidth()) {
+                    Icon(
+                        if (isPlaying) Icons.Default.Stop else Icons.Default.PlayArrow,
+                        null, modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(if (isPlaying) "Detener preview" else "Escuchar 30 segundos")
+                }
+                Spacer(Modifier.height(8.dp))
+            }
+
+            // Botón publicar — lleva al flujo de selección de imágenes
+            Button(
+                onClick = { mediaPlayer?.release(); mediaPlayer = null; onPublishClick() },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Default.CameraAlt, null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Publicar")
+            }
+        }
+    }
+}
+
+// ══════════════════════════════════════════════════════════
+// TARJETA DE CANCIÓN PROPIA (grid 2 columnas)
+// ══════════════════════════════════════════════════════════
 
 @Composable
 fun MySongCard(song: SongPostEntity, onClick: () -> Unit) {
@@ -289,56 +487,6 @@ fun MySongCard(song: SongPostEntity, onClick: () -> Unit) {
                     Text(song.artistName, style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
                 }
-            }
-        }
-    }
-}
-
-// ── Tarjeta de recomendación ──────────────────────────────
-
-@Composable
-fun RecommendationCard(rec: RecommendationResponse, onListened: () -> Unit) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            AsyncImage(model = rec.artworkUrl, contentDescription = null,
-                modifier = Modifier.size(56.dp).clip(RoundedCornerShape(8.dp)),
-                contentScale = ContentScale.Crop)
-            Column(modifier = Modifier.weight(1f)) {
-                Text(rec.trackName, style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(rec.artistName, style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Spacer(Modifier.height(6.dp))
-                Row(verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy((-8).dp)) {
-                    rec.recommendedBy.take(3).forEach { recommender ->
-                        val url = NewsickRetrofit.absoluteUrl(recommender.profilePhoto)
-                        Box(modifier = Modifier.size(24.dp)) {
-                            if (url.isNotBlank()) {
-                                AsyncImage(model = url, contentDescription = recommender.username,
-                                    modifier = Modifier.fillMaxSize().clip(CircleShape),
-                                    contentScale = ContentScale.Crop)
-                            } else {
-                                Icon(Icons.Default.AccountCircle, null,
-                                    modifier = Modifier.fillMaxSize(),
-                                    tint = MaterialTheme.colorScheme.primary)
-                            }
-                        }
-                    }
-                    Spacer(Modifier.width(12.dp))
-                    Text(
-                        if (rec.totalCount == 1) rec.recommendedBy.firstOrNull()?.username ?: ""
-                        else "${rec.totalCount} amigos",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-            IconButton(onClick = onListened) {
-                Icon(Icons.Default.CheckCircle, "Ya la escuché",
-                    tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(32.dp))
             }
         }
     }
@@ -359,30 +507,24 @@ fun EditProfileDialog(
     val context      = LocalContext.current
     var username     by remember { mutableStateOf(initialUsername) }
     var bio          by remember { mutableStateOf(initialBio) }
-    // profilePhoto guarda la URL del servidor (después de subir) o la URL previa
     var profilePhoto by remember { mutableStateOf(initialProfilePhoto) }
     var showDelete   by remember { mutableStateOf(false) }
     var deletePass   by remember { mutableStateOf("") }
     var isUploading  by remember { mutableStateOf(false) }
     var uploadError  by remember { mutableStateOf<String?>(null) }
     val scope        = rememberCoroutineScope()
-
     val usernameError = if (username.isNotBlank()) validateUsername(username) else null
 
     val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         uri?.let {
             try { context.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: Exception) {}
-            // Subir al servidor inmediatamente
             scope.launch {
                 isUploading = true; uploadError = null
                 val serverUrl = uploadProfilePhoto(context, uri)
                 if (serverUrl != null) {
-                    // Construir URL absoluta
                     profilePhoto = if (serverUrl.startsWith("http")) serverUrl
                                    else NewsickRetrofit.BASE_URL.trimEnd('/') + serverUrl
-                } else {
-                    uploadError = "Error al subir la foto. Inténtalo de nuevo."
-                }
+                } else { uploadError = "Error al subir la foto. Inténtalo de nuevo." }
                 isUploading = false
             }
         }
@@ -394,7 +536,7 @@ fun EditProfileDialog(
             title = { Text("Eliminar cuenta") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Esta acción es permanente. Todos tus datos serán eliminados.")
+                    Text("Esta acción es permanente.")
                     OutlinedTextField(value = deletePass, onValueChange = { deletePass = it },
                         label = { Text("Confirma tu contraseña") }, modifier = Modifier.fillMaxWidth(),
                         singleLine = true, visualTransformation = PasswordVisualTransformation())
@@ -416,60 +558,40 @@ fun EditProfileDialog(
         title = { Text("Editar Perfil") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                // Foto de perfil con botón de cámara
                 Box(Modifier.fillMaxWidth(), Alignment.Center) {
                     Box(Modifier.size(80.dp).clickable(enabled = !isUploading) {
                         photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                     }) {
                         val displayUrl = NewsickRetrofit.absoluteUrl(profilePhoto)
                         if (isUploading) {
-                            Box(Modifier.fillMaxSize(), Alignment.Center) {
-                                CircularProgressIndicator(modifier = Modifier.size(32.dp))
-                            }
+                            Box(Modifier.fillMaxSize(), Alignment.Center) { CircularProgressIndicator(Modifier.size(32.dp)) }
                         } else if (displayUrl.isNotBlank()) {
                             AsyncImage(model = displayUrl, contentDescription = null,
-                                modifier = Modifier.fillMaxSize().clip(CircleShape),
-                                contentScale = ContentScale.Crop)
+                                modifier = Modifier.fillMaxSize().clip(CircleShape), contentScale = ContentScale.Crop)
                         } else {
-                            Icon(Icons.Default.AccountCircle, null,
-                                modifier = Modifier.fillMaxSize(),
+                            Icon(Icons.Default.AccountCircle, null, modifier = Modifier.fillMaxSize(),
                                 tint = MaterialTheme.colorScheme.primary)
                         }
                         if (!isUploading) {
                             Surface(modifier = Modifier.align(Alignment.BottomEnd).size(24.dp),
                                 shape = CircleShape, color = MaterialTheme.colorScheme.primary) {
-                                Icon(Icons.Default.CameraAlt, null,
-                                    modifier = Modifier.padding(4.dp),
+                                Icon(Icons.Default.CameraAlt, null, modifier = Modifier.padding(4.dp),
                                     tint = MaterialTheme.colorScheme.onPrimary)
                             }
                         }
                     }
                 }
-
-                uploadError?.let {
-                    Text(it, color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall)
-                }
-
-                OutlinedTextField(value = email, onValueChange = {},
-                    label = { Text("Correo electrónico") }, modifier = Modifier.fillMaxWidth(),
-                    singleLine = true, enabled = false)
-
+                uploadError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+                OutlinedTextField(value = email, onValueChange = {}, label = { Text("Correo electrónico") },
+                    modifier = Modifier.fillMaxWidth(), singleLine = true, enabled = false)
                 OutlinedTextField(
-                    value = username,
-                    onValueChange = { if (it.length <= 30) username = it },
-                    label = { Text("Nombre de usuario") }, modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    isError = usernameError != null,
-                    supportingText = usernameError?.let { { Text(it) } }
+                    value = username, onValueChange = { if (it.length <= 30) username = it },
+                    label = { Text("Nombre de usuario") }, modifier = Modifier.fillMaxWidth(), singleLine = true,
+                    isError = usernameError != null, supportingText = usernameError?.let { { Text(it) } }
                 )
-
-                OutlinedTextField(value = bio, onValueChange = { bio = it },
-                    label = { Text("Descripción") }, modifier = Modifier.fillMaxWidth(),
-                    maxLines = 3, placeholder = { Text("Cuéntanos algo sobre ti...") })
-
+                OutlinedTextField(value = bio, onValueChange = { bio = it }, label = { Text("Descripción") },
+                    modifier = Modifier.fillMaxWidth(), maxLines = 3)
                 HorizontalDivider()
-
                 TextButton(onClick = { showDelete = true },
                     colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
                     modifier = Modifier.fillMaxWidth()) {
@@ -479,10 +601,8 @@ fun EditProfileDialog(
             }
         },
         confirmButton = {
-            Button(
-                onClick = { onSave(username, bio, profilePhoto) },
-                enabled = username.isNotBlank() && usernameError == null && !isUploading
-            ) { Text("Guardar") }
+            Button(onClick = { onSave(username, bio, profilePhoto) },
+                enabled = username.isNotBlank() && usernameError == null && !isUploading) { Text("Guardar") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } }
     )

@@ -58,6 +58,21 @@ fun PostUploadScreen(
     var statusMsg    by remember { mutableStateOf("") }
     var errorMsg     by remember { mutableStateOf<String?>(null) }
 
+    // Si hay una pista pendiente (desde recomendación), saltar al paso 1
+    LaunchedEffect(Unit) {
+        viewModel.pendingUploadTrack.value?.let { pending ->
+            selectedTrack = ItunesTrack(
+                trackId    = pending.trackId.toLongOrNull() ?: 0L,
+                trackName  = pending.trackName,
+                artistName = pending.artistName,
+                artworkUrl100 = pending.artworkUrl.replace("300x300", "100x100"),
+                previewUrl = pending.previewUrl
+            )
+            step = 1
+            viewModel.pendingUploadTrack.value = null
+        }
+    }
+
     val context = LocalContext.current
     val scope   = rememberCoroutineScope()
 
@@ -139,7 +154,7 @@ fun PostUploadScreen(
                                 val relUrl = uploadPhoto(context, uri)
                                 if (relUrl != null) {
                                     val abs = if (relUrl.startsWith("http")) relUrl
-                                              else NewsickRetrofit.BASE_URL.trimEnd('/') + relUrl
+                                    else NewsickRetrofit.BASE_URL.trimEnd('/') + relUrl
                                     uploadedUrls.add(abs)
                                     Log.d(TAG, "OK → $abs")
                                 } else {

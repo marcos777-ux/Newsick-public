@@ -1,6 +1,9 @@
 package com.makro17.newsick
 
 import android.Manifest
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.MediaPlayer
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -85,9 +88,17 @@ fun MapScreen(
     var showBottomSheet    by remember { mutableStateOf(false) }
     var showPlatformDialog by remember { mutableStateOf(false) }
     var selectedPlatform   by remember { mutableStateOf("newsick") }
-    val nearbyUsers        by viewModel.nearbyUsers
-    val mySongs            by viewModel.mySongs.collectAsState()
-    val nowPlaying         = mySongs.firstOrNull()
+    // ── Visibilidad en el mapa: desactivada por defecto ────
+    var locationVisible    by remember { mutableStateOf(false) }
+    // ── Canción detectada del sistema ──────────────────────
+    var nowPlayingDetected by remember { mutableStateOf<NowPlayingInfo?>(null) }
+    var hasNotifAccess     by remember { mutableStateOf(isNotificationListenerEnabled(context)) }
+
+    val nearbyUsers = viewModel.nearbyUsers.value
+    val mySongs     by viewModel.mySongs.collectAsState()
+    // Muestra la canción detectada del sistema; si no, la primera publicada
+    val displayTrack = nowPlayingDetected?.let { Pair(it.title, it.artist) }
+        ?: mySongs.firstOrNull()?.let { Pair(it.trackName, it.artistName) }
 
     val cameraPositionState = rememberCameraPositionState {
         position = CameraPosition.fromLatLngZoom(LatLng(40.4168, -3.7038), 15f)
@@ -97,7 +108,22 @@ fun MapScreen(
         ActivityResultContracts.RequestPermission()
     ) { granted -> hasPermission = granted }
 
-    // Obtener ubicación y publicarla al entrar
+    // Lanzador para abrir los ajustes de acceso a notificaciones
+    val notifSettingsLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { hasNotifAccess = isNotificationListenerEnabled(context) }
+
+    // ── Detectar canción en reproducción cada 5 s ─────────
+    LaunchedEffect(hasNotifAccess) {
+        while (true) {
+            if (hasNotifAccess) {
+                nowPlayingDetected = getNowPlayingInfo(context)
+            }
+            delay(5_000)
+        }
+    }
+
+    // ── Obtener posición GPS ───────────────────────────────
     LaunchedEffect(hasPermission) {
         if (!hasPermission) return@LaunchedEffect
         val fused = LocationServices.getFusedLocationProviderClient(context)
@@ -107,14 +133,24 @@ fun MapScreen(
                     val latLng = LatLng(it.latitude, it.longitude)
                     currentLatLng = latLng
                     cameraPositionState.move(CameraUpdateFactory.newLatLngZoom(latLng, 16f))
-                    viewModel.updateLocationOnMap(it.latitude, it.longitude)
                     viewModel.loadNearbyUsers(it.latitude, it.longitude)
                 }
             }
         } catch (_: SecurityException) {}
     }
 
-    // Refrescar usuarios cercanos cada 30 segundos
+    // ── Publicar/retirar ubicación al cambiar visibilidad ──
+    LaunchedEffect(locationVisible, currentLatLng) {
+        val ll = currentLatLng ?: return@LaunchedEffect
+        if (locationVisible) {
+            viewModel.updateLocationOnMap(ll.latitude, ll.longitude)
+            viewModel.loadNearbyUsers(ll.latitude, ll.longitude)
+        } else {
+            viewModel.removeLocationFromMap()
+        }
+    }
+
+    // ── Refrescar usuarios cercanos cada 30 s ─────────────
     LaunchedEffect(hasPermission) {
         if (!hasPermission) return@LaunchedEffect
         while (true) {
@@ -123,7 +159,7 @@ fun MapScreen(
         }
     }
 
-    // Limpiar ubicación del servidor al salir de la pantalla
+    // ── Limpiar ubicación al salir ─────────────────────────
     DisposableEffect(Unit) {
         onDispose { viewModel.removeLocationFromMap() }
     }
@@ -221,62 +257,93 @@ fun MapScreen(
             Box(Modifier.fillMaxSize(), Alignment.Center) { CircularProgressIndicator() }
         }
 
-        // ── Overlays superiores: Now Playing + contador ──
+        // ── Overlays superiores ────────────────────────────
         Column(
-            modifier              = Modifier.align(Alignment.TopCenter).padding(top = 16.dp),
-            horizontalAlignment   = Alignment.CenterHorizontally,
-            verticalArrangement   = Arrangement.spacedBy(8.dp)
+            modifier            = Modifier.align(Alignment.TopCenter).padding(top = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Chip "Now Playing" con la canción que el usuario está escuchando
+            // Chip "Escuchando ahora" — canción detectada del sistema o publicada
             Surface(
-                shape          = RoundedCornerShape(20.dp),
-                color          = MaterialTheme.colorScheme.surface,
-                tonalElevation = 6.dp,
-                shadowElevation = 4.dp
+                shape           = RoundedCornerShape(20.dp),
+                color           = MaterialTheme.colorScheme.surface,
+                tonalElevation  = 6.dp,
+                shadowElevation = 4.dp,
+                modifier        = Modifier.clickable {
+                    if (!hasNotifAccess) {
+                        // Abrir ajustes de acceso a notificaciones
+                        notifSettingsLauncher.launch(
+                            android.content.Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")
+                        )
+                    }
+                }
             ) {
                 Row(
                     modifier              = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment     = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    if (nowPlaying != null) {
-                        // Portada pequeña
-                        AsyncImage(
-                            model              = nowPlaying.artworkUrl,
-                            contentDescription = null,
-                            modifier           = Modifier
-                                .size(32.dp)
-                                .clip(RoundedCornerShape(6.dp)),
-                            contentScale       = ContentScale.Crop
-                        )
+                    if (displayTrack != null) {
+                        val artwork = mySongs.firstOrNull()?.artworkUrl
+                        if (artwork != null && nowPlayingDetected == null) {
+                            AsyncImage(
+                                model              = artwork,
+                                contentDescription = null,
+                                modifier           = Modifier.size(32.dp).clip(RoundedCornerShape(6.dp)),
+                                contentScale       = ContentScale.Crop
+                            )
+                        } else {
+                            // Icono de la plataforma detectada
+                            val pkg = nowPlayingDetected?.packageName ?: ""
+                            val platEmoji = when {
+                                "spotify"    in pkg -> "🟢"
+                                "youtube"    in pkg -> "🔴"
+                                "soundcloud" in pkg -> "🟠"
+                                "apple"      in pkg -> "🍎"
+                                "tidal"      in pkg -> "🔵"
+                                else                -> "🎵"
+                            }
+                            Text(platEmoji, fontSize = 24.sp)
+                        }
                         Column {
                             Text(
                                 "Escuchando ahora",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary,
+                                style      = MaterialTheme.typography.labelSmall,
+                                color      = MaterialTheme.colorScheme.primary,
                                 fontWeight = FontWeight.SemiBold
                             )
                             Text(
-                                nowPlaying.trackName,
+                                buildString {
+                                    append(displayTrack.first)
+                                    if (displayTrack.second.isNotBlank()) append(" · ${displayTrack.second}")
+                                },
                                 style    = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.widthIn(max = 180.dp)
+                                modifier = Modifier.widthIn(max = 200.dp)
                             )
                         }
                         Icon(Icons.Default.MusicNote, null,
-                            Modifier.size(16.dp),
-                            tint = MaterialTheme.colorScheme.primary)
+                            Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
                     } else {
                         Icon(Icons.Default.MusicOff, null,
                             Modifier.size(18.dp),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(
-                            "Sin canción activa",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        Column {
+                            Text(
+                                "Sin canción detectada",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            if (!hasNotifAccess) {
+                                Text(
+                                    "Toca para activar detección",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -298,7 +365,37 @@ fun MapScreen(
             }
         }
 
-        // FAB para cambiar plataforma (bottom-start, encima de la nav bar)
+        // ── Botón visibilidad (bottom-end) ─────────────────
+        FloatingActionButton(
+            onClick = {
+                locationVisible = !locationVisible
+                val ll = currentLatLng
+                if (locationVisible && ll != null) {
+                    viewModel.updateLocationOnMap(ll.latitude, ll.longitude)
+                    viewModel.loadNearbyUsers(ll.latitude, ll.longitude)
+                } else {
+                    viewModel.removeLocationFromMap()
+                }
+            },
+            modifier       = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 16.dp, bottom = 24.dp),
+            containerColor = if (locationVisible)
+                MaterialTheme.colorScheme.primary
+            else
+                MaterialTheme.colorScheme.surfaceVariant,
+            contentColor   = if (locationVisible)
+                MaterialTheme.colorScheme.onPrimary
+            else
+                MaterialTheme.colorScheme.onSurfaceVariant
+        ) {
+            Icon(
+                if (locationVisible) Icons.Default.LocationOn else Icons.Default.LocationOff,
+                contentDescription = if (locationVisible) "Ocultar ubicación" else "Compartir ubicación"
+            )
+        }
+
+        // FAB plataforma (bottom-start)
         FloatingActionButton(
             onClick        = { showPlatformDialog = true },
             modifier       = Modifier
@@ -354,18 +451,7 @@ fun MapScreen(
                                 .clickable {
                                     selectedPlatform = p
                                     currentLatLng?.let { ll ->
-                                        scope.launch {
-                                            val last = viewModel.mySongs.value.firstOrNull()
-                                            viewModel.api.updateLocation(UpdateLocationRequest(
-                                                latitude   = ll.latitude,
-                                                longitude  = ll.longitude,
-                                                trackId    = last?.trackId,
-                                                trackName  = last?.trackName,
-                                                artistName = last?.artistName,
-                                                artworkUrl = last?.artworkUrl,
-                                                platform   = p
-                                            ))
-                                        }
+                                        viewModel.updateLocationWithPlatform(ll.latitude, ll.longitude, p)
                                     }
                                     showPlatformDialog = false
                                 }

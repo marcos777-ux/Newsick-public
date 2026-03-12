@@ -1,6 +1,5 @@
 package com.makro17.newsick
 
-import kotlinx.serialization.Serializable
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import retrofit2.Retrofit
@@ -13,109 +12,111 @@ object AuthManager {
     var userId: Int   = 0
 }
 
-// ── Auth ──────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════
+// MODELOS
+// ══════════════════════════════════════════════════════════
 
-@Serializable data class LoginRequest(val email: String, val password: String)
-@Serializable data class RegisterRequest(val email: String, val password: String, val username: String)
-@Serializable data class UserResponse(
-    val id: Int, val email: String = "", val username: String = "",
+data class LoginRequest(val email: String, val password: String)
+data class RegisterRequest(val email: String, val password: String, val username: String)
+
+data class UserResponse(
+    val id: Int, val email: String, val username: String,
     val profilePhoto: String? = null, val bio: String? = null, val createdAt: String = ""
 )
-@Serializable data class AuthResponse(val user: UserResponse, val token: String)
+data class AuthResponse(val user: UserResponse, val token: String)
 
-// ── Posts ─────────────────────────────────────────────────
-
-@Serializable data class PostResponse(
+data class PostResponse(
     val trackId: String, val trackName: String, val artistName: String,
     val artworkUrl: String, val timestamp: Long, val photoCount: Int
 )
-@Serializable data class PhotoResponse(
+data class PhotoResponse(
     val id: Int, val trackId: String, val photoUri: String,
     val userId: Int, val username: String, val timestamp: Long
 )
-@Serializable data class PostRequest(
+// Foto individual con info de canción — feed social
+data class FeedPhotoItem(
+    val photoId: Int, val photoUri: String,
+    val trackId: String, val trackName: String, val artistName: String, val artworkUrl: String,
+    val userId: Int, val username: String, val timestamp: Long
+)
+// Grupo de fotos agrupadas por canción (construido en el cliente)
+data class FeedGroup(
+    val trackId: String, val trackName: String, val artistName: String, val artworkUrl: String,
+    val photos: List<FeedPhotoItem>   // ordenadas por timestamp DESC
+)
+
+data class PostRequest(
     val trackId: String, val trackName: String, val artistName: String,
     val artworkUrl: String, val timestamp: Long, val photos: List<PhotoRequest>
 )
-@Serializable data class PhotoRequest(
+data class PhotoRequest(
     val photoUri: String, val userId: Int, val username: String, val timestamp: Long
 )
-@Serializable data class UploadResponse(val url: String)
+data class UploadResponse(val url: String)
 
-// ── Usuarios ──────────────────────────────────────────────
+data class SearchUsersRequest(val query: String)
+data class UpdateProfileRequest(val bio: String, val username: String = "", val profilePhoto: String = "")
+data class DeleteAccountRequest(val password: String)
+data class FriendRequestDto(val targetUserId: Int)
+data class RespondFriendRequest(val requestId: Int, val accept: Boolean)
 
-@Serializable data class SearchUsersRequest(val query: String)
-@Serializable data class UpdateProfileRequest(val bio: String, val username: String = "", val profilePhoto: String = "")
-@Serializable data class DeleteAccountRequest(val password: String)
-
-// ── Amigos ────────────────────────────────────────────────
-
-@Serializable data class FriendRequestDto(val targetUserId: Int)
-@Serializable data class RespondFriendRequest(val requestId: Int, val accept: Boolean)
-@Serializable data class FriendRequestResponse(
+data class FriendRequestResponse(
     val id: Int, val senderId: Int, val senderUsername: String,
     val senderProfilePhoto: String = "", val status: String, val createdAt: String
 )
-@Serializable data class FriendshipResponse(
+data class FriendshipResponse(
     val id: Int, val friendId: Int, val friendUsername: String,
     val friendProfilePhoto: String = "", val createdAt: String = ""
 )
-@Serializable data class NotificationResponse(
+data class NotificationResponse(
     val id: Int, val type: String, val title: String,
     val message: String, val isRead: Boolean, val createdAt: String
 )
-@Serializable data class FriendStatusResponse(val status: String)
-@Serializable data class FriendCountResponse(val count: Int)
+data class FriendStatusResponse(val status: String)
+data class FriendCountResponse(val count: Int)
 
-// ── Mapa ──────────────────────────────────────────────────
+// Canciones de amigos rankeadas por contribuyentes
+data class FriendSongContributor(
+    val userId: Int, val username: String, val profilePhoto: String
+)
+data class FriendSongEntry(
+    val trackId: String, val trackName: String, val artistName: String, val artworkUrl: String,
+    val contributorCount: Int, val contributors: List<FriendSongContributor>,
+    val latestPhotoUri: String, val latestTimestamp: Long
+)
 
-@Serializable data class UpdateLocationRequest(
+// Recomendaciones
+data class SendRecommendationRequest(
+    val toUserId: Int, val trackId: String, val trackName: String,
+    val artistName: String, val artworkUrl: String, val previewUrl: String? = null
+)
+data class RecommenderInfo(
+    val userId: Int, val username: String, val profilePhoto: String = ""
+)
+data class RecommendationResponse(
+    val trackId: String, val trackName: String, val artistName: String,
+    val artworkUrl: String, val previewUrl: String? = null,
+    val totalCount: Int, val recommendedBy: List<RecommenderInfo>
+)
+
+// Mapa
+data class UpdateLocationRequest(
+    val latitude: Double, val longitude: Double,
+    val trackId: String? = null, val trackName: String? = null,
+    val artistName: String? = null, val artworkUrl: String? = null,
+    val platform: String? = "newsick"
+)
+data class NearbyUserResponse(
+    val userId: Int, val username: String, val profilePhoto: String = "",
     val latitude: Double, val longitude: Double,
     val trackId: String? = null, val trackName: String? = null,
     val artistName: String? = null, val artworkUrl: String? = null,
     val previewUrl: String? = null, val platform: String? = "newsick"
 )
-@Serializable data class NearbyUserResponse(
-    val userId: Int, val username: String, val profilePhoto: String,
-    val latitude: Double, val longitude: Double,
-    val trackId: String? = null, val trackName: String? = null,
-    val artistName: String? = null, val artworkUrl: String? = null,
-    val previewUrl: String? = null, val platform: String? = null,
-    val updatedAt: Long = 0L
-)
 
-// ── Versión ───────────────────────────────────────────────
-
-@Serializable data class MinVersionResponse(val minVersionCode: Int)
-
-// ── Recomendaciones ───────────────────────────────────────
-
-@Serializable data class SendRecommendationRequest(
-    val toUserId: Int,
-    val trackId: String,
-    val trackName: String,
-    val artistName: String,
-    val artworkUrl: String,
-    val previewUrl: String? = null
-)
-
-@Serializable data class RecommenderInfo(
-    val userId: Int,
-    val username: String,
-    val profilePhoto: String
-)
-
-@Serializable data class RecommendationResponse(
-    val trackId: String,
-    val trackName: String,
-    val artistName: String,
-    val artworkUrl: String,
-    val previewUrl: String? = null,
-    val recommendedBy: List<RecommenderInfo>,
-    val totalCount: Int
-)
-
-// ── Interfaz Retrofit ─────────────────────────────────────
+// ══════════════════════════════════════════════════════════
+// INTERFAZ RETROFIT
+// ══════════════════════════════════════════════════════════
 
 interface NewsickApiService {
 
@@ -128,17 +129,21 @@ interface NewsickApiService {
     @GET("api/health")
     suspend fun healthCheck(): retrofit2.Response<String>
 
-    @GET("api/version/min")
-    suspend fun getMinVersion(): retrofit2.Response<MinVersionResponse>
-
-    // Fotos
+    // Subir foto
     @Multipart
     @POST("api/uploads/photo")
     suspend fun uploadPhoto(@Part photo: MultipartBody.Part): retrofit2.Response<UploadResponse>
 
     // Posts
-    @GET("api/posts")      suspend fun getPosts(): retrofit2.Response<List<PostResponse>>
-    @GET("api/posts/feed") suspend fun getFeed(): retrofit2.Response<List<PostResponse>>
+    @GET("api/posts")
+    suspend fun getPosts(): retrofit2.Response<List<PostResponse>>
+
+    @GET("api/posts/feed")
+    suspend fun getFeed(): retrofit2.Response<List<PostResponse>>
+
+    // NUEVO — feed de fotos individuales con info de canción
+    @GET("api/posts/feed/photos")
+    suspend fun getFeedPhotos(): retrofit2.Response<List<FeedPhotoItem>>
 
     @GET("api/posts/user/{userId}")
     suspend fun getUserPosts(@Path("userId") userId: Int): retrofit2.Response<List<PostResponse>>
@@ -184,6 +189,10 @@ interface NewsickApiService {
     @DELETE("api/friends/{friendId}")
     suspend fun removeFriend(@Path("friendId") friendId: Int): retrofit2.Response<Unit>
 
+    // NUEVO — ranking de canciones de amigos por contribuyentes
+    @GET("api/friends/songs")
+    suspend fun getFriendsSongs(): retrofit2.Response<List<FriendSongEntry>>
+
     @POST("api/friend-requests/send")
     suspend fun sendFriendRequest(@Body r: FriendRequestDto): retrofit2.Response<Unit>
 
@@ -200,20 +209,6 @@ interface NewsickApiService {
     @POST("api/notifications/{id}/read")
     suspend fun markNotificationRead(@Path("id") id: Int): retrofit2.Response<Unit>
 
-    // Mapa
-    @PUT("api/location")
-    suspend fun updateLocation(@Body r: UpdateLocationRequest): retrofit2.Response<Unit>
-
-    @GET("api/map/users")
-    suspend fun getNearbyUsers(
-        @Query("lat") lat: Double,
-        @Query("lng") lng: Double,
-        @Query("radius") radius: Double = 500.0
-    ): retrofit2.Response<List<NearbyUserResponse>>
-
-    @DELETE("api/location")
-    suspend fun deleteLocation(): retrofit2.Response<Unit>
-
     // Recomendaciones
     @POST("api/recommendations")
     suspend fun sendRecommendation(@Body r: SendRecommendationRequest): retrofit2.Response<Unit>
@@ -226,12 +221,34 @@ interface NewsickApiService {
 
     @POST("api/recommendations/listened")
     suspend fun markListened(@Query("trackId") trackId: String): retrofit2.Response<Unit>
+
+    // Mapa
+    @POST("api/map/location")
+    suspend fun updateLocation(@Body r: UpdateLocationRequest): retrofit2.Response<Unit>
+
+    @GET("api/map/nearby")
+    suspend fun getNearbyUsers(
+        @Query("lat") lat: Double,
+        @Query("lng") lng: Double,
+        @Query("radius") radius: Double
+    ): retrofit2.Response<List<NearbyUserResponse>>
+
+    @DELETE("api/map/location")
+    suspend fun deleteLocation(): retrofit2.Response<Unit>
 }
 
-// ── Cliente Retrofit ──────────────────────────────────────
+// ══════════════════════════════════════════════════════════
+// CLIENTE RETROFIT
+// ══════════════════════════════════════════════════════════
 
 object NewsickRetrofit {
     const val BASE_URL = "https://newsick.duckdns.org/"
+
+    /** Convierte rutas relativas del servidor a URLs absolutas */
+    fun absoluteUrl(path: String?): String {
+        if (path.isNullOrBlank()) return ""
+        return if (path.startsWith("http")) path else BASE_URL.trimEnd('/') + path
+    }
 
     val api: NewsickApiService by lazy {
         val client = OkHttpClient.Builder()
@@ -253,11 +270,5 @@ object NewsickRetrofit {
             .addConverterFactory(GsonConverterFactory.create())
             .build()
             .create(NewsickApiService::class.java)
-    }
-
-    // Helper para construir URLs absolutas de fotos de perfil
-    fun absoluteUrl(path: String?): String {
-        if (path.isNullOrBlank()) return ""
-        return if (path.startsWith("http")) path else BASE_URL.trimEnd('/') + path
     }
 }

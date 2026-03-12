@@ -58,6 +58,15 @@ fun validateUsername(username: String): String? = when {
 }
 
 // ══════════════════════════════════════════════════════════
+// PENDING UPLOAD TRACK (desde recomendación → publicar)
+// ══════════════════════════════════════════════════════════
+
+data class PendingUploadTrack(
+    val trackId: String, val trackName: String, val artistName: String,
+    val artworkUrl: String, val previewUrl: String?
+)
+
+// ══════════════════════════════════════════════════════════
 // VIEW MODEL
 // ══════════════════════════════════════════════════════════
 
@@ -106,11 +115,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var friendCount        = mutableStateOf(0)
     var friendsList        = mutableStateOf<List<FriendshipResponse>>(emptyList())
 
+    // Feed agrupado por canción — nuevo diseño social
+    var feedPhotoGroups    = mutableStateOf<List<FeedGroup>>(emptyList())
+    // Feed viejo (compatibilidad)
     var apiFeed            = mutableStateOf<List<PostResponse>>(emptyList())
     var mixedPhotosCache   = mutableStateOf<Map<String, List<PhotoResponse>>>(emptyMap())
 
-    // Dark mode: null = seguir al sistema, true = oscuro, false = claro
+    // Canciones de amigos rankeadas
+    var friendsSongs       = mutableStateOf<List<FriendSongEntry>>(emptyList())
+
+    // Dark mode: null = sistema, true = oscuro, false = claro
     var darkModeOverride   = mutableStateOf<Boolean?>(null)
+
+    // Pista preseleccionada para publicar desde recomendación
+    var pendingUploadTrack = mutableStateOf<PendingUploadTrack?>(null)
 
     // Mapa
     var nearbyUsers        = mutableStateOf<List<NearbyUserResponse>>(emptyList())
@@ -134,11 +152,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 isLoggedIn.value         = true
             }
             val savedTheme = prefs.getInt("dark_mode", -1)
-            darkModeOverride.value = when (savedTheme) {
-                0    -> false
-                1    -> true
-                else -> null
-            }
+            darkModeOverride.value = when (savedTheme) { 0 -> false; 1 -> true; else -> null }
             delay(1000)
             _isLoading.value = false
         }
@@ -172,8 +186,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var pendingPassword = ""
 
     fun performRegister(email: String, pass: String, username: String) {
-        val usernameError = validateUsername(username)
-        if (usernameError != null) { authError.value = usernameError; return }
+        val err = validateUsername(username)
+        if (err != null) { authError.value = err; return }
         viewModelScope.launch {
             _isLoading.value = true; authError.value = null
             try {
@@ -199,12 +213,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         AuthManager.userId       = auth.user.id
         isLoggedIn.value         = true
         prefs.edit().apply {
-            putInt("user_id", auth.user.id)
-            putString("username", auth.user.username)
-            putString("bio", auth.user.bio ?: "")
-            putString("email", auth.user.email)
-            putString("token", auth.token)
-            putString("profile_photo", auth.user.profilePhoto ?: "")
+            putInt("user_id", auth.user.id); putString("username", auth.user.username)
+            putString("bio", auth.user.bio ?: ""); putString("email", auth.user.email)
+            putString("token", auth.token); putString("profile_photo", auth.user.profilePhoto ?: "")
             apply()
         }
     }
@@ -215,7 +226,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         loggedEmail.value = ""; loggedProfilePhoto.value = ""
         AuthManager.token = ""; AuthManager.userId = 0
         prefs.edit().clear().apply()
-        apiFeed.value = emptyList(); mixedPhotosCache.value = emptyMap()
+        feedPhotoGroups.value = emptyList(); apiFeed.value = emptyList()
+        mixedPhotosCache.value = emptyMap(); friendsSongs.value = emptyList()
         shownNotifIds.clear()
     }
 
@@ -237,11 +249,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     onResult(true, null)
                 } else {
-                    onResult(false, when (r.code()) {
-                        409  -> "Nombre de usuario ya en uso"
-                        400  -> "Nombre de usuario inválido"
-                        else -> "Error al actualizar"
-                    })
+                    onResult(false, when (r.code()) { 409 -> "Nombre de usuario ya en uso"; 400 -> "Nombre inválido"; else -> "Error al actualizar" })
                 }
             } catch (e: Exception) { e.printStackTrace(); onResult(false, "Error de conexión") }
         }
@@ -249,10 +257,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun deleteAccount(password: String, onResult: (Boolean) -> Unit) {
         viewModelScope.launch {
-            try {
-                val r = api.deleteAccount(DeleteAccountRequest(password))
-                if (r.isSuccessful) { logout(); onResult(true) } else onResult(false)
-            } catch (e: Exception) { onResult(false) }
+            try { val r = api.deleteAccount(DeleteAccountRequest(password)); if (r.isSuccessful) { logout(); onResult(true) } else onResult(false) }
+            catch (e: Exception) { onResult(false) }
         }
     }
 
@@ -295,6 +301,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun loadFriendsSongs() {
+        viewModelScope.launch {
+            try { val r = api.getFriendsSongs(); if (r.isSuccessful) friendsSongs.value = r.body() ?: emptyList() }
+            catch (_: Exception) {}
+        }
+    }
+
     fun sendFriendRequest(targetUserId: Int, onResult: (Boolean) -> Unit) {
         viewModelScope.launch {
             try {
@@ -318,7 +331,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (r.isSuccessful) {
                     friendsList.value = friendsList.value.filter { it.friendId != friendId }
                     friendCount.value = (friendCount.value - 1).coerceAtLeast(0)
-                    invalidateMixedCache(); loadFeed()
+                    invalidateMixedCache(); loadFeedPhotos()
                     onResult(true)
                 } else onResult(false)
             } catch (e: Exception) { e.printStackTrace(); onResult(false) }
@@ -361,6 +374,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // ── FEED ──────────────────────────────────────────────
 
+    /** Carga fotos individuales del feed y las agrupa por canción */
+    fun loadFeedPhotos() {
+        viewModelScope.launch {
+            try {
+                val r = api.getFeedPhotos()
+                if (r.isSuccessful) {
+                    val photos = r.body() ?: emptyList()
+                    // Agrupar por trackId manteniendo orden de primera aparición (más reciente)
+                    val seen   = linkedMapOf<String, MutableList<FeedPhotoItem>>()
+                    photos.forEach { photo ->
+                        seen.getOrPut(photo.trackId) { mutableListOf() }.add(photo)
+                    }
+                    feedPhotoGroups.value = seen.values.map { list ->
+                        val first = list.first()
+                        FeedGroup(
+                            trackId    = first.trackId,
+                            trackName  = first.trackName,
+                            artistName = first.artistName,
+                            artworkUrl = first.artworkUrl,
+                            photos     = list
+                        )
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+    }
+
+    /** Carga feed agrupado antiguo (para compatibilidad) */
     fun loadFeed() {
         viewModelScope.launch {
             try { val r = api.getFeed(); if (r.isSuccessful) apiFeed.value = r.body() ?: emptyList() }
@@ -404,7 +445,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (r.isSuccessful) {
                 repo.createPost(trackId, trackName, artistName, artworkUrl, photoUris,
                     loggedUserId.value, loggedUsername.value)
-                invalidateMixedCache(trackId); loadFeed()
+                invalidateMixedCache(trackId); loadFeedPhotos()
             }
             r.isSuccessful
         } catch (e: Exception) { e.printStackTrace(); false }
@@ -421,7 +462,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (r.isSuccessful) {
                     db.postPhotoDao().deleteByTrackAndUser(trackId, loggedUserId.value)
                     db.songPostDao().deleteEmptySongs()
-                    invalidateMixedCache(trackId); loadFeed(); invalidateMySongsCache()
+                    invalidateMixedCache(trackId); loadFeedPhotos(); invalidateMySongsCache()
                     onResult(true)
                 } else onResult(false)
             } catch (e: Exception) { e.printStackTrace(); onResult(false) }
@@ -439,9 +480,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val song = mySongs.value.firstOrNull()
                 api.updateLocation(UpdateLocationRequest(
-                    latitude   = lat,  longitude  = lng,
-                    trackId    = song?.trackId,   trackName  = song?.trackName,
+                    latitude   = lat, longitude  = lng,
+                    trackId    = song?.trackId,  trackName  = song?.trackName,
                     artistName = song?.artistName, artworkUrl = song?.artworkUrl
+                ))
+            } catch (_: Exception) {}
+        }
+    }
+
+    fun updateLocationWithPlatform(lat: Double, lng: Double, platform: String) {
+        viewModelScope.launch {
+            try {
+                val song = mySongs.value.firstOrNull()
+                api.updateLocation(UpdateLocationRequest(
+                    latitude   = lat, longitude  = lng,
+                    trackId    = song?.trackId,  trackName  = song?.trackName,
+                    artistName = song?.artistName, artworkUrl = song?.artworkUrl,
+                    platform   = platform
                 ))
             } catch (_: Exception) {}
         }
@@ -507,7 +562,7 @@ fun NewsickApp(windowSize: WindowWidthSizeClass, viewModel: MainViewModel) {
     LaunchedEffect(Unit) {
         viewModel.loadNotificationsData(context)
         viewModel.loadFriendCount()
-        viewModel.loadFeed()
+        viewModel.loadFeedPhotos()   // nuevo feed de fotos
     }
 
     Scaffold(
@@ -517,7 +572,7 @@ fun NewsickApp(windowSize: WindowWidthSizeClass, viewModel: MainViewModel) {
                     icon = { Icon(Icons.Default.Search, null) }, label = { Text("Social") },
                     selected = currentRoute == "social",
                     onClick = {
-                        if (currentRoute == "social") { viewModel.loadNotificationsData(context); viewModel.loadFeed() }
+                        if (currentRoute == "social") { viewModel.loadNotificationsData(context); viewModel.loadFeedPhotos() }
                         else navController.navigate("social") { launchSingleTop = true; popUpTo("social") }
                     }
                 )
@@ -550,7 +605,8 @@ fun NewsickApp(windowSize: WindowWidthSizeClass, viewModel: MainViewModel) {
                 ProfileScreen(viewModel,
                     onSettingsClick = { navController.navigate("settings") },
                     onSongClick     = { navController.navigate("detail/$it") },
-                    onFriendsClick  = { navController.navigate("friends") }
+                    onFriendsClick  = { navController.navigate("friends") },
+                    onUploadClick   = { navController.navigate("upload") }
                 )
             }
             composable("settings") {
@@ -559,7 +615,8 @@ fun NewsickApp(windowSize: WindowWidthSizeClass, viewModel: MainViewModel) {
             composable("friends") {
                 FriendsListScreen(viewModel,
                     onBack      = { navController.popBackStack() },
-                    onUserClick = { navController.navigate("userProfile/$it") }
+                    onUserClick = { navController.navigate("userProfile/$it") },
+                    onSongClick = { navController.navigate("detail/$it") }   // nuevo
                 )
             }
             composable("upload") {
@@ -625,20 +682,16 @@ fun AuthScreen(viewModel: MainViewModel) {
                 OutlinedTextField(password, { password = it }, Modifier.fillMaxWidth(),
                     label = { Text("Contraseña") },
                     visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                    singleLine = true)
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), singleLine = true)
             } else {
                 Text("Solo letras, números, puntos y guiones bajos",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(bottom = 8.dp))
+                    textAlign = TextAlign.Center, modifier = Modifier.padding(bottom = 8.dp))
                 OutlinedTextField(
                     value = username, onValueChange = { if (it.length <= 30) username = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Nombre de usuario") }, singleLine = true,
-                    isError = usernameError != null,
-                    supportingText = usernameError?.let { { Text(it) } }
+                    modifier = Modifier.fillMaxWidth(), label = { Text("Nombre de usuario") }, singleLine = true,
+                    isError = usernameError != null, supportingText = usernameError?.let { { Text(it) } }
                 )
             }
 
@@ -652,11 +705,8 @@ fun AuthScreen(viewModel: MainViewModel) {
                 onClick = {
                     when {
                         needUser -> viewModel.performRegister(email, password, username)
-                        isReg    -> {
-                            if (email.contains("@") && password.length >= 6) viewModel.prepareRegister(email, password)
-                            else viewModel.authError.value = "Correo válido y mínimo 6 caracteres"
-                        }
-                        else -> viewModel.performLogin(email, password)
+                        isReg    -> { if (email.contains("@") && password.length >= 6) viewModel.prepareRegister(email, password) else viewModel.authError.value = "Correo válido y mínimo 6 caracteres" }
+                        else     -> viewModel.performLogin(email, password)
                     }
                 },
                 Modifier.fillMaxWidth(),
@@ -693,50 +743,36 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit, onLogout: () ->
     }
 
     Scaffold(topBar = {
-        TopAppBar(
-            title = { Text("Configuración") },
-            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Volver") } }
-        )
+        TopAppBar(title = { Text("Configuración") },
+            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Volver") } })
     }) { pad ->
         Column(Modifier.fillMaxSize().padding(pad).padding(horizontal = 24.dp)) {
             Spacer(Modifier.height(24.dp))
             Text("Newsick", style = MaterialTheme.typography.headlineLarge, color = MaterialTheme.colorScheme.primary)
             Spacer(Modifier.height(32.dp))
 
-            Text("Apariencia", style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Apariencia", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(8.dp))
 
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column {
-                    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically) {
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                         RadioButton(selected = darkMode == null, onClick = { viewModel.setDarkMode(null) })
                         Spacer(Modifier.width(8.dp))
                         Column {
                             Text("Automático (sistema)")
-                            Text("Actualmente: ${if (systemDark) "oscuro" else "claro"}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("Actualmente: ${if (systemDark) "oscuro" else "claro"}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                     HorizontalDivider(Modifier.padding(horizontal = 16.dp))
-                    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically) {
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                         RadioButton(selected = darkMode == false, onClick = { viewModel.setDarkMode(false) })
-                        Spacer(Modifier.width(8.dp))
-                        Icon(Icons.Default.LightMode, null, Modifier.size(20.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("Modo claro")
+                        Spacer(Modifier.width(8.dp)); Icon(Icons.Default.LightMode, null, Modifier.size(20.dp)); Spacer(Modifier.width(8.dp)); Text("Modo claro")
                     }
                     HorizontalDivider(Modifier.padding(horizontal = 16.dp))
-                    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically) {
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                         RadioButton(selected = darkMode == true, onClick = { viewModel.setDarkMode(true) })
-                        Spacer(Modifier.width(8.dp))
-                        Icon(Icons.Default.DarkMode, null, Modifier.size(20.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("Modo oscuro")
+                        Spacer(Modifier.width(8.dp)); Icon(Icons.Default.DarkMode, null, Modifier.size(20.dp)); Spacer(Modifier.width(8.dp)); Text("Modo oscuro")
                     }
                 }
             }
@@ -745,26 +781,21 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit, onLogout: () ->
 
             Button(onClick = {
                 val i = Intent(Intent.ACTION_SENDTO).apply {
-                    data = Uri.parse("mailto:")
-                    putExtra(Intent.EXTRA_EMAIL, arrayOf("marcosqh17@gmail.com"))
+                    data = Uri.parse("mailto:"); putExtra(Intent.EXTRA_EMAIL, arrayOf("marcosqh17@gmail.com"))
                     putExtra(Intent.EXTRA_SUBJECT, "Feedback Newsick")
                 }
                 try { context.startActivity(i) }
-                catch (_: ActivityNotFoundException) {
-                    Toast.makeText(context, "No se encontró app de correo", Toast.LENGTH_SHORT).show()
-                }
-            }, modifier = Modifier.fillMaxWidth()) {
-                Icon(Icons.Default.Email, null); Spacer(Modifier.width(8.dp)); Text("Enviar Feedback")
-            }
+                catch (_: ActivityNotFoundException) { Toast.makeText(context, "No se encontró app de correo", Toast.LENGTH_SHORT).show() }
+            }, Modifier.fillMaxWidth()) { Icon(Icons.Default.Email, null); Spacer(Modifier.width(8.dp)); Text("Enviar Feedback") }
+
             Spacer(Modifier.height(12.dp))
-            OutlinedButton(onClick = onLogout, modifier = Modifier.fillMaxWidth(),
+            OutlinedButton(onClick = onLogout, Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)) {
                 Icon(Icons.AutoMirrored.Filled.ExitToApp, null); Spacer(Modifier.width(8.dp)); Text("Cerrar Sesión")
             }
 
             Spacer(Modifier.weight(1f))
-            Text("v$version", style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            Text("v$version", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 16.dp))
         }
     }
