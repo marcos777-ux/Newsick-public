@@ -1,5 +1,6 @@
 package com.makro17.newsick
 
+import android.R.string.ok
 import android.media.MediaPlayer
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.*
@@ -89,15 +90,14 @@ fun SongDetailScreen(
             confirmButton = {
                 Button(
                     onClick = {
-                        viewModel.deletePhoto(p.id) { ok ->
-                            if (ok) {
+                        viewModel.deletePhoto(p.id, trackId) { success ->
+                            if (success) {
                                 photos = photos.filter { it.id != p.id }
-                                // ✅ Si no quedan fotos, volver atrás automáticamente
                                 if (photos.isEmpty()) {
                                     mediaPlayer?.stop()
                                     mediaPlayer?.release()
                                     mediaPlayer = null
-                                    onBack()  // ← Volver al perfil (se refrescará solo)
+                                    onBack()
                                 }
                             }
                         }

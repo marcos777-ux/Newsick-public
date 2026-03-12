@@ -130,6 +130,10 @@ interface SongPostDao {
     // ✅ NUEVO: Contar fotos de una canción
     @Query("SELECT COUNT(*) FROM post_photos WHERE track_id = :trackId")
     suspend fun countPhotosByTrackId(trackId: String): Int
+
+    // En SongPostDao:
+    @Query("SELECT COUNT(*) FROM post_photos WHERE track_id = :trackId AND user_id = :userId")
+    suspend fun countPhotosByTrackIdAndUser(trackId: String, userId: Int): Int
 }
 
 @Dao
@@ -146,6 +150,12 @@ interface PostPhotoDao {
     // ✅ NUEVO: Obtener todas las fotos
     @Query("SELECT * FROM post_photos")
     suspend fun getAllPhotos(): List<PostPhotoEntity>
+
+    @Query("SELECT * FROM post_photos WHERE id = :id LIMIT 1")
+    suspend fun getById(id: Int): PostPhotoEntity?
+
+    @Query("DELETE FROM post_photos WHERE track_id = :trackId AND user_id = :userId")
+    suspend fun deleteByTrackAndUser(trackId: String, userId: Int)
 }
 
 // ══════════════════════════════════════════════════════════
@@ -243,8 +253,8 @@ class NewsickRepository(private val db: NewsickDatabase) {
 
     // NUEVO: Búsqueda de usuarios
     suspend fun searchUsers(query: String) = db.userDao().searchUsers(query)
-    suspend fun cleanupEmptySongs(trackId: String) {
-        val count = db.songPostDao().countPhotosByTrackId(trackId)
+    suspend fun cleanupEmptySongs(trackId: String, userId: Int) {
+        val count = db.songPostDao().countPhotosByTrackIdAndUser(trackId, userId)
         if (count == 0) {
             db.songPostDao().deleteByTrackId(trackId)
         }

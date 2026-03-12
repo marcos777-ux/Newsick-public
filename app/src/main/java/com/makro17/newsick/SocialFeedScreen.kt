@@ -217,7 +217,10 @@ fun UserSearchResultItem(user: UserResponse, onClick: () -> Unit) {
             }
             Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Text(user.username, style = MaterialTheme.typography.titleSmall)
+                Text(
+                    user.username.orEmpty().ifBlank { "Usuario" },  // ← protegido
+                    style = MaterialTheme.typography.titleSmall
+                )
                 if (!user.bio.isNullOrBlank()) {
                     Text(user.bio, style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)

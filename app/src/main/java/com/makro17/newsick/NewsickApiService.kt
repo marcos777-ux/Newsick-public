@@ -13,16 +13,18 @@ object AuthManager {
     var userId: Int   = 0
 }
 
-// ── Modelos ───────────────────────────────────────────────
+// ── Modelos Auth ──────────────────────────────────────────
 
 @Serializable data class LoginRequest(val email: String, val password: String)
 @Serializable data class RegisterRequest(val email: String, val password: String, val username: String)
 
 @Serializable data class UserResponse(
-    val id: Int, val email: String, val username: String,
+    val id: Int, val email: String = "", val username: String = "",
     val profilePhoto: String? = null, val bio: String? = null, val createdAt: String = ""
 )
 @Serializable data class AuthResponse(val user: UserResponse, val token: String)
+
+// ── Modelos Posts ─────────────────────────────────────────
 
 @Serializable data class PostResponse(
     val trackId: String, val trackName: String, val artistName: String,
@@ -41,9 +43,14 @@ object AuthManager {
 )
 @Serializable data class UploadResponse(val url: String)
 
+// ── Modelos Usuarios ──────────────────────────────────────
+
 @Serializable data class SearchUsersRequest(val query: String)
 @Serializable data class UpdateProfileRequest(val bio: String, val username: String = "", val profilePhoto: String = "")
 @Serializable data class DeleteAccountRequest(val password: String)
+
+// ── Modelos Amigos ────────────────────────────────────────
+
 @Serializable data class FriendRequestDto(val targetUserId: Int)
 @Serializable data class RespondFriendRequest(val requestId: Int, val accept: Boolean)
 
@@ -61,6 +68,36 @@ object AuthManager {
 )
 @Serializable data class FriendStatusResponse(val status: String)
 @Serializable data class FriendCountResponse(val count: Int)
+
+// ── Modelos Mapa / Ubicación ──────────────────────────────
+
+@Serializable data class UpdateLocationRequest(
+    val latitude: Double,
+    val longitude: Double,
+    val trackId: String?    = null,
+    val trackName: String?  = null,
+    val artistName: String? = null,
+    val artworkUrl: String? = null,
+    val previewUrl: String? = null,
+    val platform: String?   = "newsick"
+)
+
+@Serializable data class NearbyUserResponse(
+    val userId: Int,
+    val username: String,
+    val profilePhoto: String,
+    val latitude: Double,
+    val longitude: Double,
+    val trackId: String?    = null,
+    val trackName: String?  = null,
+    val artistName: String? = null,
+    val artworkUrl: String? = null,
+    val previewUrl: String? = null,
+    val platform: String?   = null,
+    val updatedAt: Long     = 0L
+)
+
+@Serializable data class MinVersionResponse(val minVersionCode: Int)
 
 // ── Interfaz Retrofit ─────────────────────────────────────
 
@@ -81,8 +118,8 @@ interface NewsickApiService {
     suspend fun uploadPhoto(@Part photo: MultipartBody.Part): retrofit2.Response<UploadResponse>
 
     // Posts
-    @GET("api/posts")        suspend fun getPosts(): retrofit2.Response<List<PostResponse>>
-    @GET("api/posts/feed")   suspend fun getFeed(): retrofit2.Response<List<PostResponse>>
+    @GET("api/posts")      suspend fun getPosts(): retrofit2.Response<List<PostResponse>>
+    @GET("api/posts/feed") suspend fun getFeed(): retrofit2.Response<List<PostResponse>>
 
     @GET("api/posts/user/{userId}")
     suspend fun getUserPosts(@Path("userId") userId: Int): retrofit2.Response<List<PostResponse>>
@@ -99,7 +136,6 @@ interface NewsickApiService {
     @POST("api/posts")
     suspend fun createPost(@Body r: PostRequest): retrofit2.Response<Unit>
 
-    // Borrar una foto propia (solo si userId == autenticado)
     @DELETE("api/posts/photos/{photoId}")
     suspend fun deletePhoto(@Path("photoId") photoId: Int): retrofit2.Response<Unit>
 
@@ -144,6 +180,23 @@ interface NewsickApiService {
 
     @POST("api/notifications/{id}/read")
     suspend fun markNotificationRead(@Path("id") id: Int): retrofit2.Response<Unit>
+
+    // Mapa / Ubicación
+    @PUT("api/location")
+    suspend fun updateLocation(@Body r: UpdateLocationRequest): retrofit2.Response<Unit>
+
+    @GET("api/map/users")
+    suspend fun getNearbyUsers(
+        @Query("lat")    lat: Double,
+        @Query("lng")    lng: Double,
+        @Query("radius") radius: Double = 500.0
+    ): retrofit2.Response<List<NearbyUserResponse>>
+
+    @DELETE("api/location")
+    suspend fun deleteLocation(): retrofit2.Response<Unit>
+
+    @GET("api/version/min")
+    suspend fun getMinVersion(): retrofit2.Response<MinVersionResponse>
 }
 
 // ── Cliente Retrofit ──────────────────────────────────────
@@ -162,7 +215,7 @@ object NewsickRetrofit {
             }
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
-            .writeTimeout(90, TimeUnit.SECONDS)  // Fotos grandes pueden tardar
+            .writeTimeout(90, TimeUnit.SECONDS)
             .build()
 
         Retrofit.Builder()

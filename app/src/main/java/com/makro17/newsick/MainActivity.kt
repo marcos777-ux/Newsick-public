@@ -51,6 +51,8 @@ import kotlinx.coroutines.launch
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
+    var isOutdated = mutableStateOf(false)
+
     private val _mySongsRefresh = MutableStateFlow(0L)
 
     val mySongs: StateFlow<List<SongPostEntity>> =
@@ -63,7 +65,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private var searchJob: Job? = null
-    private val api = NewsickRetrofit.api
+    val api = NewsickRetrofit.api
     private val prefs by lazy {
         getApplication<Application>().getSharedPreferences("newsick_prefs", Context.MODE_PRIVATE)
     }
@@ -95,12 +97,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     var apiFeed             = mutableStateOf<List<PostResponse>>(emptyList())
     var mixedPhotosCache    = mutableStateOf<Map<String, List<PhotoResponse>>>(emptyMap())
+    var nearbyUsers         = mutableStateOf<List<NearbyUserResponse>>(emptyList())
 
     val feedSongs: StateFlow<List<SongPostEntity>> = repo.getActiveSongs()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     init {
         viewModelScope.launch {
+            // Comprobar versión mínima antes de nada
+            try {
+                val r = api.getMinVersion()
+                if (r.isSuccessful) {
+                    val minCode = r.body()?.minVersionCode ?: 1
+                    val packageInfo = getApplication<Application>()
+                        .packageManager
+                        .getPackageInfo(getApplication<Application>().packageName, 0)
+                    val myCode = androidx.core.content.pm.PackageInfoCompat
+                        .getLongVersionCode(packageInfo).toInt()
+                    if (myCode < minCode) {
+                        isOutdated.value = true
+                        _isLoading.value = false
+                        return@launch
+                    }
+                }
+            } catch (_: Exception) { /* Sin conexión: dejar pasar */ }
+
             val saved = prefs.getInt("user_id", 0)
             if (saved > 0) {
                 loggedUserId.value       = saved
@@ -364,27 +385,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     ) {
         viewModelScope.launch { createPostAsync(trackId, trackName, artistName, artworkUrl, photoUris) }
     }
-    fun deletePhoto(photoId: Int, onResult: (Boolean) -> Unit) {
+    fun deletePhoto(photoId: Int, trackId: String, onResult: (Boolean) -> Unit) {
         viewModelScope.launch {
             try {
                 val r = api.deletePhoto(photoId)
                 if (r.isSuccessful) {
-                    // ✅ 1. Borrar foto de Room localmente
-                    db.postPhotoDao().deleteById(photoId)
+                    // Borrar TODAS las fotos locales del usuario para esa canción
+                    // (el ID local de Room nunca coincide con el ID del servidor)
+                    db.postPhotoDao().deleteByTrackAndUser(trackId, loggedUserId.value)
 
-                    // ✅ 2. Obtener el track_id de la foto antes de borrarla
-                    // Necesitamos consultar la foto primero para saber su track_id
-                    val allPhotos = db.postPhotoDao().getAllPhotos()
-                    val deletedPhoto = allPhotos.find { it.id == photoId }
+                    // Si ya no quedan fotos de nadie para esa canción, borrar song_post local
+                    db.songPostDao().deleteEmptySongs()
 
-                    // ✅ 3. Si encontramos la foto, limpiar canción si no hay más fotos
-                    if (deletedPhoto != null) {
-                        repo.cleanupEmptySongs(deletedPhoto.trackId)
-                    }
-
-                    // ✅ 4. Invalidar cachés
-                    invalidateMixedCache()
+                    invalidateMixedCache(trackId)
                     loadFeed()
+                    invalidateMySongsCache()
 
                     onResult(true)
                 } else onResult(false)
@@ -423,6 +438,52 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun getPhotosForSong(trackId: String) = repo.getPhotosForSong(trackId)
     suspend fun getSongPost(trackId: String) = repo.getSongPost(trackId)
+
+    // ── MAPA EN TIEMPO REAL ───────────────────────────────
+
+    fun updateLocationOnMap(lat: Double, lng: Double) {
+        viewModelScope.launch {
+            try {
+                val lastSong = mySongs.value.firstOrNull()
+                var previewUrl: String? = null
+                if (lastSong != null) {
+                    try {
+                        val trackIdLong = lastSong.trackId.toLongOrNull()
+                        if (trackIdLong != null) {
+                            val r = ItunesRetrofit.api.lookupTrack(trackIdLong)
+                            previewUrl = r.results.firstOrNull()?.previewUrl
+                        }
+                    } catch (_: Exception) {}
+                }
+                api.updateLocation(UpdateLocationRequest(
+                    latitude   = lat,
+                    longitude  = lng,
+                    trackId    = lastSong?.trackId,
+                    trackName  = lastSong?.trackName,
+                    artistName = lastSong?.artistName,
+                    artworkUrl = lastSong?.artworkUrl,
+                    previewUrl = previewUrl,
+                    platform   = "newsick"
+                ))
+            } catch (e: Exception) { e.printStackTrace() }
+        }
+    }
+
+    fun loadNearbyUsers(lat: Double, lng: Double, radiusMeters: Double = 500.0) {
+        viewModelScope.launch {
+            try {
+                val r = api.getNearbyUsers(lat, lng, radiusMeters)
+                if (r.isSuccessful) nearbyUsers.value = r.body() ?: emptyList()
+            } catch (e: Exception) { e.printStackTrace() }
+        }
+    }
+
+    fun removeLocationFromMap() {
+        viewModelScope.launch {
+            try { api.deleteLocation() } catch (_: Exception) {}
+        }
+    }
+
 }
 
 // ══════════════════════════════════════════════════════════
@@ -441,8 +502,11 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
                 val windowSize = calculateWindowSizeClass(this)
-                if (viewModel.isLoggedIn.value) NewsickApp(windowSize.widthSizeClass, viewModel)
-                else AuthScreen(viewModel)
+                when {
+                    viewModel.isOutdated.value -> OutdatedScreen()
+                    viewModel.isLoggedIn.value -> NewsickApp(windowSize.widthSizeClass, viewModel)
+                    else                       -> AuthScreen(viewModel)
+                }
             }
         }
     }
@@ -496,7 +560,12 @@ fun NewsickApp(windowSize: WindowWidthSizeClass, viewModel: MainViewModel) {
                     onUserClick          = { navController.navigate("userProfile/$it") }
                 )
             }
-            composable("map") { MapScreen() }
+            composable("map") {
+                MapScreen(
+                    viewModel   = viewModel,
+                    onUserClick = { navController.navigate("userProfile/$it") }
+                )
+            }
             composable("profile") {
                 ProfileScreen(viewModel,
                     onSettingsClick = { navController.navigate("settings") },
@@ -669,6 +738,28 @@ fun SettingsScreen(onBack: () -> Unit, onLogout: () -> Unit) {
             Spacer(Modifier.height(24.dp))
             Text("v$version", style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+fun OutdatedScreen() {
+    Box(Modifier.fillMaxSize(), Alignment.Center) {
+        Column(
+            Modifier.padding(40.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Icon(Icons.Default.SystemUpdate, null,
+                Modifier.size(72.dp),
+                tint = MaterialTheme.colorScheme.primary)
+            Text("Actualización requerida",
+                style = MaterialTheme.typography.headlineSmall,
+                textAlign = TextAlign.Center)
+            Text("Esta versión de Newsick ya no está soportada. Actualiza la app para continuar.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center)
         }
     }
 }
