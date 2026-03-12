@@ -13,18 +13,17 @@ object AuthManager {
     var userId: Int   = 0
 }
 
-// ── Modelos Auth ──────────────────────────────────────────
+// ── Auth ──────────────────────────────────────────────────
 
 @Serializable data class LoginRequest(val email: String, val password: String)
 @Serializable data class RegisterRequest(val email: String, val password: String, val username: String)
-
 @Serializable data class UserResponse(
     val id: Int, val email: String = "", val username: String = "",
     val profilePhoto: String? = null, val bio: String? = null, val createdAt: String = ""
 )
 @Serializable data class AuthResponse(val user: UserResponse, val token: String)
 
-// ── Modelos Posts ─────────────────────────────────────────
+// ── Posts ─────────────────────────────────────────────────
 
 @Serializable data class PostResponse(
     val trackId: String, val trackName: String, val artistName: String,
@@ -43,17 +42,16 @@ object AuthManager {
 )
 @Serializable data class UploadResponse(val url: String)
 
-// ── Modelos Usuarios ──────────────────────────────────────
+// ── Usuarios ──────────────────────────────────────────────
 
 @Serializable data class SearchUsersRequest(val query: String)
 @Serializable data class UpdateProfileRequest(val bio: String, val username: String = "", val profilePhoto: String = "")
 @Serializable data class DeleteAccountRequest(val password: String)
 
-// ── Modelos Amigos ────────────────────────────────────────
+// ── Amigos ────────────────────────────────────────────────
 
 @Serializable data class FriendRequestDto(val targetUserId: Int)
 @Serializable data class RespondFriendRequest(val requestId: Int, val accept: Boolean)
-
 @Serializable data class FriendRequestResponse(
     val id: Int, val senderId: Int, val senderUsername: String,
     val senderProfilePhoto: String = "", val status: String, val createdAt: String
@@ -69,35 +67,53 @@ object AuthManager {
 @Serializable data class FriendStatusResponse(val status: String)
 @Serializable data class FriendCountResponse(val count: Int)
 
-// ── Modelos Mapa / Ubicación ──────────────────────────────
+// ── Mapa ──────────────────────────────────────────────────
 
 @Serializable data class UpdateLocationRequest(
-    val latitude: Double,
-    val longitude: Double,
-    val trackId: String?    = null,
-    val trackName: String?  = null,
-    val artistName: String? = null,
-    val artworkUrl: String? = null,
-    val previewUrl: String? = null,
-    val platform: String?   = "newsick"
+    val latitude: Double, val longitude: Double,
+    val trackId: String? = null, val trackName: String? = null,
+    val artistName: String? = null, val artworkUrl: String? = null,
+    val previewUrl: String? = null, val platform: String? = "newsick"
+)
+@Serializable data class NearbyUserResponse(
+    val userId: Int, val username: String, val profilePhoto: String,
+    val latitude: Double, val longitude: Double,
+    val trackId: String? = null, val trackName: String? = null,
+    val artistName: String? = null, val artworkUrl: String? = null,
+    val previewUrl: String? = null, val platform: String? = null,
+    val updatedAt: Long = 0L
 )
 
-@Serializable data class NearbyUserResponse(
-    val userId: Int,
-    val username: String,
-    val profilePhoto: String,
-    val latitude: Double,
-    val longitude: Double,
-    val trackId: String?    = null,
-    val trackName: String?  = null,
-    val artistName: String? = null,
-    val artworkUrl: String? = null,
-    val previewUrl: String? = null,
-    val platform: String?   = null,
-    val updatedAt: Long     = 0L
-)
+// ── Versión ───────────────────────────────────────────────
 
 @Serializable data class MinVersionResponse(val minVersionCode: Int)
+
+// ── Recomendaciones ───────────────────────────────────────
+
+@Serializable data class SendRecommendationRequest(
+    val toUserId: Int,
+    val trackId: String,
+    val trackName: String,
+    val artistName: String,
+    val artworkUrl: String,
+    val previewUrl: String? = null
+)
+
+@Serializable data class RecommenderInfo(
+    val userId: Int,
+    val username: String,
+    val profilePhoto: String
+)
+
+@Serializable data class RecommendationResponse(
+    val trackId: String,
+    val trackName: String,
+    val artistName: String,
+    val artworkUrl: String,
+    val previewUrl: String? = null,
+    val recommendedBy: List<RecommenderInfo>,
+    val totalCount: Int
+)
 
 // ── Interfaz Retrofit ─────────────────────────────────────
 
@@ -112,7 +128,10 @@ interface NewsickApiService {
     @GET("api/health")
     suspend fun healthCheck(): retrofit2.Response<String>
 
-    // Subir foto → devuelve {"url": "/uploads/xxx.jpg"}
+    @GET("api/version/min")
+    suspend fun getMinVersion(): retrofit2.Response<MinVersionResponse>
+
+    // Fotos
     @Multipart
     @POST("api/uploads/photo")
     suspend fun uploadPhoto(@Part photo: MultipartBody.Part): retrofit2.Response<UploadResponse>
@@ -181,22 +200,32 @@ interface NewsickApiService {
     @POST("api/notifications/{id}/read")
     suspend fun markNotificationRead(@Path("id") id: Int): retrofit2.Response<Unit>
 
-    // Mapa / Ubicación
+    // Mapa
     @PUT("api/location")
     suspend fun updateLocation(@Body r: UpdateLocationRequest): retrofit2.Response<Unit>
 
     @GET("api/map/users")
     suspend fun getNearbyUsers(
-        @Query("lat")    lat: Double,
-        @Query("lng")    lng: Double,
+        @Query("lat") lat: Double,
+        @Query("lng") lng: Double,
         @Query("radius") radius: Double = 500.0
     ): retrofit2.Response<List<NearbyUserResponse>>
 
     @DELETE("api/location")
     suspend fun deleteLocation(): retrofit2.Response<Unit>
 
-    @GET("api/version/min")
-    suspend fun getMinVersion(): retrofit2.Response<MinVersionResponse>
+    // Recomendaciones
+    @POST("api/recommendations")
+    suspend fun sendRecommendation(@Body r: SendRecommendationRequest): retrofit2.Response<Unit>
+
+    @GET("api/recommendations/mine")
+    suspend fun getMyRecommendations(): retrofit2.Response<List<RecommendationResponse>>
+
+    @GET("api/recommendations/user/{userId}")
+    suspend fun getUserRecommendations(@Path("userId") userId: Int): retrofit2.Response<List<RecommendationResponse>>
+
+    @POST("api/recommendations/listened")
+    suspend fun markListened(@Query("trackId") trackId: String): retrofit2.Response<Unit>
 }
 
 // ── Cliente Retrofit ──────────────────────────────────────
@@ -224,5 +253,11 @@ object NewsickRetrofit {
             .addConverterFactory(GsonConverterFactory.create())
             .build()
             .create(NewsickApiService::class.java)
+    }
+
+    // Helper para construir URLs absolutas de fotos de perfil
+    fun absoluteUrl(path: String?): String {
+        if (path.isNullOrBlank()) return ""
+        return if (path.startsWith("http")) path else BASE_URL.trimEnd('/') + path
     }
 }

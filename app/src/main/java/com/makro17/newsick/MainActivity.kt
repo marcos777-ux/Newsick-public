@@ -45,13 +45,24 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
 // ══════════════════════════════════════════════════════════
+// USERNAME VALIDATION
+// ══════════════════════════════════════════════════════════
+
+val USERNAME_REGEX = Regex("^[a-zA-Z0-9._]{3,30}$")
+
+fun validateUsername(username: String): String? = when {
+    username.length < 3              -> "Mínimo 3 caracteres"
+    username.length > 30             -> "Máximo 30 caracteres"
+    !USERNAME_REGEX.matches(username) -> "Solo letras, números, puntos y guiones bajos"
+    else -> null
+}
+
+// ══════════════════════════════════════════════════════════
 // VIEW MODEL
 // ══════════════════════════════════════════════════════════
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class MainViewModel(application: Application) : AndroidViewModel(application) {
-
-    var isOutdated = mutableStateOf(false)
 
     private val _mySongsRefresh = MutableStateFlow(0L)
 
@@ -61,7 +72,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (uid == 0) flowOf(emptyList())
                 else repo.getActiveSongsByUser(uid)
             }
-            .combine(_mySongsRefresh) { songs, _ -> songs }  // ✅ Combinar con refresh trigger
+            .combine(_mySongsRefresh) { songs, _ -> songs }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private var searchJob: Job? = null
@@ -69,59 +80,48 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val prefs by lazy {
         getApplication<Application>().getSharedPreferences("newsick_prefs", Context.MODE_PRIVATE)
     }
-    private val db   = NewsickDatabase.getDatabase(application)
+    val db   = NewsickDatabase.getDatabase(application)
     private val repo = NewsickRepository(db)
 
     private val _isLoading = MutableStateFlow(true)
     val isLoading = _isLoading.asStateFlow()
 
-    var isLoggedIn          = mutableStateOf(false)
-    var authError           = mutableStateOf<String?>(null)
-    var isRegistering       = mutableStateOf(false)
-    var needsUsername       = mutableStateOf(false)
-    var loggedUsername      = mutableStateOf("")
-    var loggedBio           = mutableStateOf("")
-    var loggedEmail         = mutableStateOf("")
-    var loggedProfilePhoto  = mutableStateOf("")
-    var loggedUserId        = mutableStateOf(0)
+    var isLoggedIn         = mutableStateOf(false)
+    var authError          = mutableStateOf<String?>(null)
+    var isRegistering      = mutableStateOf(false)
+    var needsUsername      = mutableStateOf(false)
+    var loggedUsername     = mutableStateOf("")
+    var loggedBio          = mutableStateOf("")
+    var loggedEmail        = mutableStateOf("")
+    var loggedProfilePhoto = mutableStateOf("")
+    var loggedUserId       = mutableStateOf(0)
 
-    var userSearchQuery     = mutableStateOf("")
-    var searchResults       = mutableStateOf<List<UserResponse>>(emptyList())
-    var isSearching         = mutableStateOf(false)
+    var userSearchQuery    = mutableStateOf("")
+    var searchResults      = mutableStateOf<List<UserResponse>>(emptyList())
+    var isSearching        = mutableStateOf(false)
 
-    var pendingRequests     = mutableStateOf<List<FriendRequestResponse>>(emptyList())
-    var notifications       = mutableStateOf<List<NotificationResponse>>(emptyList())
-    var unreadCount         = mutableStateOf(0)
-    var friendCount         = mutableStateOf(0)
-    var friendsList         = mutableStateOf<List<FriendshipResponse>>(emptyList())
+    var pendingRequests    = mutableStateOf<List<FriendRequestResponse>>(emptyList())
+    var notifications      = mutableStateOf<List<NotificationResponse>>(emptyList())
+    var unreadCount        = mutableStateOf(0)
+    var friendCount        = mutableStateOf(0)
+    var friendsList        = mutableStateOf<List<FriendshipResponse>>(emptyList())
 
-    var apiFeed             = mutableStateOf<List<PostResponse>>(emptyList())
-    var mixedPhotosCache    = mutableStateOf<Map<String, List<PhotoResponse>>>(emptyMap())
-    var nearbyUsers         = mutableStateOf<List<NearbyUserResponse>>(emptyList())
+    var apiFeed            = mutableStateOf<List<PostResponse>>(emptyList())
+    var mixedPhotosCache   = mutableStateOf<Map<String, List<PhotoResponse>>>(emptyMap())
+
+    // Dark mode: null = seguir al sistema, true = oscuro, false = claro
+    var darkModeOverride   = mutableStateOf<Boolean?>(null)
+
+    // Mapa
+    var nearbyUsers        = mutableStateOf<List<NearbyUserResponse>>(emptyList())
 
     val feedSongs: StateFlow<List<SongPostEntity>> = repo.getActiveSongs()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    private val shownNotifIds = mutableSetOf<Int>()
+
     init {
         viewModelScope.launch {
-            // Comprobar versión mínima antes de nada
-            try {
-                val r = api.getMinVersion()
-                if (r.isSuccessful) {
-                    val minCode = r.body()?.minVersionCode ?: 1
-                    val packageInfo = getApplication<Application>()
-                        .packageManager
-                        .getPackageInfo(getApplication<Application>().packageName, 0)
-                    val myCode = androidx.core.content.pm.PackageInfoCompat
-                        .getLongVersionCode(packageInfo).toInt()
-                    if (myCode < minCode) {
-                        isOutdated.value = true
-                        _isLoading.value = false
-                        return@launch
-                    }
-                }
-            } catch (_: Exception) { /* Sin conexión: dejar pasar */ }
-
             val saved = prefs.getInt("user_id", 0)
             if (saved > 0) {
                 loggedUserId.value       = saved
@@ -133,9 +133,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 AuthManager.userId       = saved
                 isLoggedIn.value         = true
             }
+            val savedTheme = prefs.getInt("dark_mode", -1)
+            darkModeOverride.value = when (savedTheme) {
+                0    -> false
+                1    -> true
+                else -> null
+            }
             delay(1000)
             _isLoading.value = false
         }
+    }
+
+    // ── Dark mode ─────────────────────────────────────────
+
+    fun setDarkMode(value: Boolean?) {
+        darkModeOverride.value = value
+        prefs.edit().putInt("dark_mode", when (value) { false -> 0; true -> 1; else -> -1 }).apply()
     }
 
     // ── AUTH ──────────────────────────────────────────────
@@ -159,12 +172,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var pendingPassword = ""
 
     fun performRegister(email: String, pass: String, username: String) {
+        val usernameError = validateUsername(username)
+        if (usernameError != null) { authError.value = usernameError; return }
         viewModelScope.launch {
             _isLoading.value = true; authError.value = null
             try {
                 val r = api.register(RegisterRequest(email, pass, username))
                 if (r.isSuccessful) saveSession(r.body()!!)
-                else authError.value = "Este correo ya está registrado"
+                else authError.value = when (r.code()) {
+                    409  -> "Nombre de usuario o email ya en uso"
+                    400  -> "Nombre de usuario inválido"
+                    else -> "Error al registrarse"
+                }
             } catch (e: Exception) { authError.value = "Error de conexión: ${e.message}" }
             _isLoading.value = false
         }
@@ -196,13 +215,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         loggedEmail.value = ""; loggedProfilePhoto.value = ""
         AuthManager.token = ""; AuthManager.userId = 0
         prefs.edit().clear().apply()
-        apiFeed.value = emptyList()
-        mixedPhotosCache.value = emptyMap()
+        apiFeed.value = emptyList(); mixedPhotosCache.value = emptyMap()
+        shownNotifIds.clear()
     }
 
     // ── PERFIL ────────────────────────────────────────────
 
-    fun updateProfile(newUsername: String, newBio: String, newPhoto: String, onResult: (Boolean) -> Unit) {
+    fun updateProfile(newUsername: String, newBio: String, newPhoto: String, onResult: (Boolean, String?) -> Unit) {
+        val err = validateUsername(newUsername)
+        if (err != null) { onResult(false, err); return }
         viewModelScope.launch {
             try {
                 val r = api.updateProfile(UpdateProfileRequest(bio = newBio, username = newUsername, profilePhoto = newPhoto))
@@ -214,9 +235,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         putString("username", u.username); putString("bio", u.bio ?: "")
                         putString("profile_photo", u.profilePhoto ?: ""); apply()
                     }
-                    onResult(true)
-                } else onResult(false)
-            } catch (e: Exception) { e.printStackTrace(); onResult(false) }
+                    onResult(true, null)
+                } else {
+                    onResult(false, when (r.code()) {
+                        409  -> "Nombre de usuario ya en uso"
+                        400  -> "Nombre de usuario inválido"
+                        else -> "Error al actualizar"
+                    })
+                }
+            } catch (e: Exception) { e.printStackTrace(); onResult(false, "Error de conexión") }
         }
     }
 
@@ -300,7 +327,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // ── NOTIFICACIONES ────────────────────────────────────
 
-    fun loadNotificationsData() {
+    fun loadNotificationsData(context: Context? = null) {
         viewModelScope.launch {
             try {
                 val rq = api.getPendingRequests()
@@ -308,7 +335,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val rn = api.getNotifications()
                 if (rn.isSuccessful) {
                     val list = rn.body() ?: emptyList()
-                    notifications.value = list; unreadCount.value = list.count { !it.isRead }
+                    notifications.value = list
+                    unreadCount.value   = list.count { !it.isRead }
+                    if (context != null) {
+                        list.filter { !it.isRead && !shownNotifIds.contains(it.id) }
+                            .forEach { notif ->
+                                NotificationHelper.show(context, notif.id, notif.title, notif.message)
+                                shownNotifIds.add(notif.id)
+                            }
+                    }
                 }
             } catch (e: Exception) { e.printStackTrace() }
         }
@@ -324,7 +359,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // ── FEED Y FOTOS MEZCLADAS ────────────────────────────
+    // ── FEED ──────────────────────────────────────────────
 
     fun loadFeed() {
         viewModelScope.launch {
@@ -359,12 +394,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     ): Boolean {
         return try {
             val request = PostRequest(
-                trackId    = trackId,
-                trackName  = trackName,
-                artistName = artistName,
-                artworkUrl = artworkUrl,
-                timestamp  = System.currentTimeMillis(),
-                photos     = photoUris.map { uri ->
+                trackId = trackId, trackName = trackName, artistName = artistName,
+                artworkUrl = artworkUrl, timestamp = System.currentTimeMillis(),
+                photos = photoUris.map { uri ->
                     PhotoRequest(uri, loggedUserId.value, loggedUsername.value, System.currentTimeMillis())
                 }
             )
@@ -372,118 +404,64 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (r.isSuccessful) {
                 repo.createPost(trackId, trackName, artistName, artworkUrl, photoUris,
                     loggedUserId.value, loggedUsername.value)
-                invalidateMixedCache(trackId)
-                loadFeed()
+                invalidateMixedCache(trackId); loadFeed()
             }
             r.isSuccessful
         } catch (e: Exception) { e.printStackTrace(); false }
     }
 
-    fun createPost(
-        trackId: String, trackName: String, artistName: String,
-        artworkUrl: String, photoUris: List<String>
-    ) {
+    fun createPost(trackId: String, trackName: String, artistName: String, artworkUrl: String, photoUris: List<String>) {
         viewModelScope.launch { createPostAsync(trackId, trackName, artistName, artworkUrl, photoUris) }
     }
+
     fun deletePhoto(photoId: Int, trackId: String, onResult: (Boolean) -> Unit) {
         viewModelScope.launch {
             try {
                 val r = api.deletePhoto(photoId)
                 if (r.isSuccessful) {
-                    // Borrar TODAS las fotos locales del usuario para esa canción
-                    // (el ID local de Room nunca coincide con el ID del servidor)
                     db.postPhotoDao().deleteByTrackAndUser(trackId, loggedUserId.value)
-
-                    // Si ya no quedan fotos de nadie para esa canción, borrar song_post local
                     db.songPostDao().deleteEmptySongs()
-
-                    invalidateMixedCache(trackId)
-                    loadFeed()
-                    invalidateMySongsCache()
-
+                    invalidateMixedCache(trackId); loadFeed(); invalidateMySongsCache()
                     onResult(true)
                 } else onResult(false)
-            } catch (e: Exception) {
-                e.printStackTrace()
-                onResult(false)
-            }
+            } catch (e: Exception) { e.printStackTrace(); onResult(false) }
         }
     }
 
-    // ✅ NUEVA FUNCIÓN: Limpiar canciones sin fotos de Room
-    private suspend fun cleanupEmptySongsFromRoom() {
-        // Obtener todas las canciones de Room
-        val allSongs = db.songPostDao().getActiveSongs().first()
-
-        // Verificar cada canción
-        allSongs.forEach { song ->
-            val photos = db.postPhotoDao().getPhotosForSong(song.trackId).first()
-            if (photos.isEmpty()) {
-                // Si no tiene fotos, borrar de Room
-                // Necesitamos agregar este método al DAO (ver paso 2)
-                db.songPostDao().deleteByTrackId(song.trackId)
-            }
-        }
-    }
-
-    // ✅ Agrega esta nueva función para forzar refresh de mySongs
     private fun invalidateMySongsCache() {
-        viewModelScope.launch {
-            // Pequeño delay para dar tiempo a que Room procese el delete
-            delay(300)
-            // Forzar que mySongs emita un nuevo valor
-            _mySongsRefresh.value = System.currentTimeMillis()
-        }
+        viewModelScope.launch { delay(300); _mySongsRefresh.value = System.currentTimeMillis() }
     }
 
-    fun getPhotosForSong(trackId: String) = repo.getPhotosForSong(trackId)
-    suspend fun getSongPost(trackId: String) = repo.getSongPost(trackId)
-
-    // ── MAPA EN TIEMPO REAL ───────────────────────────────
+    // ── MAPA ──────────────────────────────────────────────
 
     fun updateLocationOnMap(lat: Double, lng: Double) {
         viewModelScope.launch {
             try {
-                val lastSong = mySongs.value.firstOrNull()
-                var previewUrl: String? = null
-                if (lastSong != null) {
-                    try {
-                        val trackIdLong = lastSong.trackId.toLongOrNull()
-                        if (trackIdLong != null) {
-                            val r = ItunesRetrofit.api.lookupTrack(trackIdLong)
-                            previewUrl = r.results.firstOrNull()?.previewUrl
-                        }
-                    } catch (_: Exception) {}
-                }
+                val song = mySongs.value.firstOrNull()
                 api.updateLocation(UpdateLocationRequest(
-                    latitude   = lat,
-                    longitude  = lng,
-                    trackId    = lastSong?.trackId,
-                    trackName  = lastSong?.trackName,
-                    artistName = lastSong?.artistName,
-                    artworkUrl = lastSong?.artworkUrl,
-                    previewUrl = previewUrl,
-                    platform   = "newsick"
+                    latitude   = lat,  longitude  = lng,
+                    trackId    = song?.trackId,   trackName  = song?.trackName,
+                    artistName = song?.artistName, artworkUrl = song?.artworkUrl
                 ))
-            } catch (e: Exception) { e.printStackTrace() }
+            } catch (_: Exception) {}
         }
     }
 
-    fun loadNearbyUsers(lat: Double, lng: Double, radiusMeters: Double = 500.0) {
+    fun loadNearbyUsers(lat: Double, lng: Double, radius: Double = 500.0) {
         viewModelScope.launch {
             try {
-                val r = api.getNearbyUsers(lat, lng, radiusMeters)
+                val r = api.getNearbyUsers(lat, lng, radius)
                 if (r.isSuccessful) nearbyUsers.value = r.body() ?: emptyList()
-            } catch (e: Exception) { e.printStackTrace() }
+            } catch (_: Exception) {}
         }
     }
 
     fun removeLocationFromMap() {
-        viewModelScope.launch {
-            try { api.deleteLocation() } catch (_: Exception) {}
-        }
+        viewModelScope.launch { try { api.deleteLocation() } catch (_: Exception) {} }
     }
 
+    fun getPhotosForSong(trackId: String) = repo.getPhotosForSong(trackId)
+    suspend fun getSongPost(trackId: String) = repo.getSongPost(trackId)
 }
 
 // ══════════════════════════════════════════════════════════
@@ -498,31 +476,36 @@ class MainActivity : ComponentActivity() {
         val splashScreen = installSplashScreen()
         super.onCreate(savedInstanceState)
         splashScreen.setKeepOnScreenCondition { viewModel.isLoading.value }
+        NotificationHelper.createChannel(this)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 0)
+        }
         enableEdgeToEdge()
         setContent {
-            MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
+            val systemDark   = isSystemInDarkTheme()
+            val darkOverride by viewModel.darkModeOverride
+            val isDark       = darkOverride ?: systemDark
+            MaterialTheme(colorScheme = if (isDark) darkColorScheme() else lightColorScheme()) {
                 val windowSize = calculateWindowSizeClass(this)
-                when {
-                    viewModel.isOutdated.value -> OutdatedScreen()
-                    viewModel.isLoggedIn.value -> NewsickApp(windowSize.widthSizeClass, viewModel)
-                    else                       -> AuthScreen(viewModel)
-                }
+                if (viewModel.isLoggedIn.value) NewsickApp(windowSize.widthSizeClass, viewModel)
+                else AuthScreen(viewModel)
             }
         }
     }
 }
 
 // ══════════════════════════════════════════════════════════
-// NAVEGACIÓN PRINCIPAL
+// NAVEGACIÓN
 // ══════════════════════════════════════════════════════════
 
 @Composable
 fun NewsickApp(windowSize: WindowWidthSizeClass, viewModel: MainViewModel) {
     val navController = rememberNavController()
     val currentRoute  = navController.currentBackStackEntryAsState().value?.destination?.route
+    val context       = LocalContext.current
 
     LaunchedEffect(Unit) {
-        viewModel.loadNotificationsData()
+        viewModel.loadNotificationsData(context)
         viewModel.loadFriendCount()
         viewModel.loadFeed()
     }
@@ -534,7 +517,7 @@ fun NewsickApp(windowSize: WindowWidthSizeClass, viewModel: MainViewModel) {
                     icon = { Icon(Icons.Default.Search, null) }, label = { Text("Social") },
                     selected = currentRoute == "social",
                     onClick = {
-                        if (currentRoute == "social") { viewModel.loadNotificationsData(); viewModel.loadFeed() }
+                        if (currentRoute == "social") { viewModel.loadNotificationsData(context); viewModel.loadFeed() }
                         else navController.navigate("social") { launchSingleTop = true; popUpTo("social") }
                     }
                 )
@@ -561,10 +544,7 @@ fun NewsickApp(windowSize: WindowWidthSizeClass, viewModel: MainViewModel) {
                 )
             }
             composable("map") {
-                MapScreen(
-                    viewModel   = viewModel,
-                    onUserClick = { navController.navigate("userProfile/$it") }
-                )
+                MapScreen(viewModel, onUserClick = { navController.navigate("userProfile/$it") })
             }
             composable("profile") {
                 ProfileScreen(viewModel,
@@ -574,7 +554,7 @@ fun NewsickApp(windowSize: WindowWidthSizeClass, viewModel: MainViewModel) {
                 )
             }
             composable("settings") {
-                SettingsScreen(onBack = { navController.popBackStack() }, onLogout = { viewModel.logout() })
+                SettingsScreen(viewModel = viewModel, onBack = { navController.popBackStack() }, onLogout = { viewModel.logout() })
             }
             composable("friends") {
                 FriendsListScreen(viewModel,
@@ -623,6 +603,7 @@ fun AuthScreen(viewModel: MainViewModel) {
     val needUser  = viewModel.needsUsername.value
     val isLoading = viewModel.isLoading.collectAsState().value
     val authError = viewModel.authError.value
+    val usernameError = if (needUser && username.isNotBlank()) validateUsername(username) else null
 
     Box(Modifier.fillMaxSize(), Alignment.Center) {
         Column(Modifier.padding(32.dp).fillMaxWidth(),
@@ -632,7 +613,7 @@ fun AuthScreen(viewModel: MainViewModel) {
             Icon(if (needUser) Icons.Default.AccountCircle else Icons.Default.MusicNote,
                 null, Modifier.size(80.dp), tint = MaterialTheme.colorScheme.primary)
             Spacer(Modifier.height(16.dp))
-            Text(when { needUser -> "Configura tu perfil"; isReg -> "Crea tu cuenta"; else -> "Bienvenido a Newsick" },
+            Text(when { needUser -> "Elige tu nombre de usuario"; isReg -> "Crea tu cuenta"; else -> "Bienvenido a Newsick" },
                 style = MaterialTheme.typography.headlineMedium)
             Spacer(Modifier.height(32.dp))
 
@@ -647,10 +628,18 @@ fun AuthScreen(viewModel: MainViewModel) {
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                     singleLine = true)
             } else {
-                Text("Elige un nombre de usuario", style = MaterialTheme.typography.bodyMedium,
-                    textAlign = TextAlign.Center, modifier = Modifier.padding(bottom = 16.dp))
-                OutlinedTextField(username, { username = it }, Modifier.fillMaxWidth(),
-                    label = { Text("Nombre de usuario") }, singleLine = true)
+                Text("Solo letras, números, puntos y guiones bajos",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(bottom = 8.dp))
+                OutlinedTextField(
+                    value = username, onValueChange = { if (it.length <= 30) username = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Nombre de usuario") }, singleLine = true,
+                    isError = usernameError != null,
+                    supportingText = usernameError?.let { { Text(it) } }
+                )
             }
 
             authError?.let {
@@ -661,21 +650,17 @@ fun AuthScreen(viewModel: MainViewModel) {
 
             Button(
                 onClick = {
-                    // ✅ Lógica de navegación del 'when' corregida con llaves
                     when {
                         needUser -> viewModel.performRegister(email, password, username)
                         isReg    -> {
-                            if (email.contains("@") && password.length >= 6) {
-                                viewModel.prepareRegister(email, password)
-                            } else {
-                                viewModel.authError.value = "Correo válido y mínimo 6 caracteres"
-                            }
+                            if (email.contains("@") && password.length >= 6) viewModel.prepareRegister(email, password)
+                            else viewModel.authError.value = "Correo válido y mínimo 6 caracteres"
                         }
                         else -> viewModel.performLogin(email, password)
                     }
                 },
                 Modifier.fillMaxWidth(),
-                enabled = !isLoading && (if (needUser) username.isNotBlank() else true)
+                enabled = !isLoading && (if (needUser) username.isNotBlank() && usernameError == null else true)
             ) {
                 if (isLoading) CircularProgressIndicator(Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary)
                 else Text(when { needUser -> "Finalizar"; isReg -> "Siguiente"; else -> "Iniciar Sesión" })
@@ -698,21 +683,64 @@ fun AuthScreen(viewModel: MainViewModel) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(onBack: () -> Unit, onLogout: () -> Unit) {
-    val context = LocalContext.current
+fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit, onLogout: () -> Unit) {
+    val context    = LocalContext.current
+    val systemDark = isSystemInDarkTheme()
+    val darkMode   by viewModel.darkModeOverride
+
     val version = remember {
         try { context.packageManager.getPackageInfo(context.packageName, 0).versionName } catch (_: Exception) { "?" }
     }
 
     Scaffold(topBar = {
-        TopAppBar(title = { Text("Configuración") },
-            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Volver") } })
+        TopAppBar(
+            title = { Text("Configuración") },
+            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Volver") } }
+        )
     }) { pad ->
-        Column(Modifier.fillMaxSize().padding(pad).padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center) {
-
+        Column(Modifier.fillMaxSize().padding(pad).padding(horizontal = 24.dp)) {
+            Spacer(Modifier.height(24.dp))
             Text("Newsick", style = MaterialTheme.typography.headlineLarge, color = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.height(32.dp))
+
+            Text("Apariencia", style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(8.dp))
+
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column {
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(selected = darkMode == null, onClick = { viewModel.setDarkMode(null) })
+                        Spacer(Modifier.width(8.dp))
+                        Column {
+                            Text("Automático (sistema)")
+                            Text("Actualmente: ${if (systemDark) "oscuro" else "claro"}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                    HorizontalDivider(Modifier.padding(horizontal = 16.dp))
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(selected = darkMode == false, onClick = { viewModel.setDarkMode(false) })
+                        Spacer(Modifier.width(8.dp))
+                        Icon(Icons.Default.LightMode, null, Modifier.size(20.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Modo claro")
+                    }
+                    HorizontalDivider(Modifier.padding(horizontal = 16.dp))
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(selected = darkMode == true, onClick = { viewModel.setDarkMode(true) })
+                        Spacer(Modifier.width(8.dp))
+                        Icon(Icons.Default.DarkMode, null, Modifier.size(20.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Modo oscuro")
+                    }
+                }
+            }
+
             Spacer(Modifier.height(24.dp))
 
             Button(onClick = {
@@ -725,41 +753,19 @@ fun SettingsScreen(onBack: () -> Unit, onLogout: () -> Unit) {
                 catch (_: ActivityNotFoundException) {
                     Toast.makeText(context, "No se encontró app de correo", Toast.LENGTH_SHORT).show()
                 }
-            }) { Icon(Icons.Default.Email, null); Spacer(Modifier.width(8.dp)); Text("Enviar Feedback") }
-
-            Spacer(Modifier.height(16.dp))
-
-            // ✅ Actualizado a AutoMirrored.Filled.ExitToApp
-            OutlinedButton(onClick = onLogout,
+            }, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Default.Email, null); Spacer(Modifier.width(8.dp)); Text("Enviar Feedback")
+            }
+            Spacer(Modifier.height(12.dp))
+            OutlinedButton(onClick = onLogout, modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)) {
                 Icon(Icons.AutoMirrored.Filled.ExitToApp, null); Spacer(Modifier.width(8.dp)); Text("Cerrar Sesión")
             }
 
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.weight(1f))
             Text("v$version", style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-}
-
-@Composable
-fun OutdatedScreen() {
-    Box(Modifier.fillMaxSize(), Alignment.Center) {
-        Column(
-            Modifier.padding(40.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            Icon(Icons.Default.SystemUpdate, null,
-                Modifier.size(72.dp),
-                tint = MaterialTheme.colorScheme.primary)
-            Text("Actualización requerida",
-                style = MaterialTheme.typography.headlineSmall,
-                textAlign = TextAlign.Center)
-            Text("Esta versión de Newsick ya no está soportada. Actualiza la app para continuar.",
-                style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center)
+                modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 16.dp))
         }
     }
 }
