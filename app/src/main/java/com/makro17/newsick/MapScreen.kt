@@ -72,7 +72,6 @@ fun MapScreen(
 ) {
     val context      = LocalContext.current
     val scope        = rememberCoroutineScope()
-    val nearbyUsers  by viewModel.nearbyUsers
 
     var hasPermission by remember {
         mutableStateOf(
@@ -86,6 +85,9 @@ fun MapScreen(
     var showBottomSheet    by remember { mutableStateOf(false) }
     var showPlatformDialog by remember { mutableStateOf(false) }
     var selectedPlatform   by remember { mutableStateOf("newsick") }
+    val nearbyUsers        by viewModel.nearbyUsers
+    val mySongs            by viewModel.mySongs.collectAsState()
+    val nowPlaying         = mySongs.firstOrNull()
 
     val cameraPositionState = rememberCameraPositionState {
         position = CameraPosition.fromLatLngZoom(LatLng(40.4168, -3.7038), 15f)
@@ -219,20 +221,80 @@ fun MapScreen(
             Box(Modifier.fillMaxSize(), Alignment.Center) { CircularProgressIndicator() }
         }
 
-        // Contador de usuarios cercanos (top center)
-        if (mapLoaded && nearbyUsers.isNotEmpty()) {
+        // ── Overlays superiores: Now Playing + contador ──
+        Column(
+            modifier              = Modifier.align(Alignment.TopCenter).padding(top = 16.dp),
+            horizontalAlignment   = Alignment.CenterHorizontally,
+            verticalArrangement   = Arrangement.spacedBy(8.dp)
+        ) {
+            // Chip "Now Playing" con la canción que el usuario está escuchando
             Surface(
-                modifier       = Modifier.align(Alignment.TopCenter).padding(top = 16.dp),
                 shape          = RoundedCornerShape(20.dp),
-                color          = MaterialTheme.colorScheme.primaryContainer,
-                tonalElevation = 4.dp
+                color          = MaterialTheme.colorScheme.surface,
+                tonalElevation = 6.dp,
+                shadowElevation = 4.dp
             ) {
-                Text(
-                    "${nearbyUsers.size} persona${if (nearbyUsers.size != 1) "s" else ""} escuchando cerca",
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                    style    = MaterialTheme.typography.labelMedium,
-                    color    = MaterialTheme.colorScheme.onPrimaryContainer
-                )
+                Row(
+                    modifier              = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment     = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    if (nowPlaying != null) {
+                        // Portada pequeña
+                        AsyncImage(
+                            model              = nowPlaying.artworkUrl,
+                            contentDescription = null,
+                            modifier           = Modifier
+                                .size(32.dp)
+                                .clip(RoundedCornerShape(6.dp)),
+                            contentScale       = ContentScale.Crop
+                        )
+                        Column {
+                            Text(
+                                "Escuchando ahora",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                nowPlaying.trackName,
+                                style    = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.widthIn(max = 180.dp)
+                            )
+                        }
+                        Icon(Icons.Default.MusicNote, null,
+                            Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.primary)
+                    } else {
+                        Icon(Icons.Default.MusicOff, null,
+                            Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            "Sin canción activa",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            // Contador de usuarios cercanos
+            if (mapLoaded && nearbyUsers.isNotEmpty()) {
+                Surface(
+                    shape          = RoundedCornerShape(20.dp),
+                    color          = MaterialTheme.colorScheme.primaryContainer,
+                    tonalElevation = 4.dp
+                ) {
+                    Text(
+                        "${nearbyUsers.size} persona${if (nearbyUsers.size != 1) "s" else ""} escuchando cerca",
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        style    = MaterialTheme.typography.labelMedium,
+                        color    = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
             }
         }
 
