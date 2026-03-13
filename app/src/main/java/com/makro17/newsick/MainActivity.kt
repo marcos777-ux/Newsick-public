@@ -544,6 +544,44 @@ class MainActivity : ComponentActivity() {
             val systemDark   = isSystemInDarkTheme()
             val darkOverride by viewModel.darkModeOverride
             val isDark       = darkOverride ?: systemDark
+            var updateUrl       by remember { mutableStateOf<String?>(null) }
+            var latestVersion   by remember { mutableStateOf<String?>(null) }
+            val context = LocalContext.current
+
+            LaunchedEffect(Unit) {
+                try {
+                    val res = NewsickRetrofit.api.getLatestVersion()
+                    if (res.isSuccessful) {
+                        val body = res.body() ?: return@LaunchedEffect
+                        val myVersion = context.packageManager
+                            .getPackageInfo(context.packageName, 0).versionCode
+                        if (body.latestVersionCode > myVersion) {
+                            latestVersion = body.latestVersionName
+                            updateUrl     = body.downloadUrl
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+
+            // Diálogo de actualización disponible
+            updateUrl?.let { url ->
+                AlertDialog(
+                    onDismissRequest = { updateUrl = null },
+                    title   = { Text("Nueva versión disponible") },
+                    text    = { Text("Hay una nueva versión de Newsick disponible: ${latestVersion ?: ""}. ¿Quieres descargarla ahora?") },
+                    confirmButton = {
+                        Button(onClick = {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                            updateUrl = null
+                        }) { Text("Descargar") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { updateUrl = null }) { Text("Ahora no") }
+                    }
+                )
+            }
+
+
             MaterialTheme(colorScheme = if (isDark) darkColorScheme() else lightColorScheme()) {
                 val windowSize = calculateWindowSizeClass(this)
                 if (viewModel.isLoggedIn.value) NewsickApp(windowSize.widthSizeClass, viewModel)

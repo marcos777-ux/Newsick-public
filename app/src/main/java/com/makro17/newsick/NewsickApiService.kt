@@ -118,6 +118,12 @@ data class NearbyUserResponse(
     val previewUrl: String? = null, val platform: String? = "newsick"
 )
 
+data class LatestVersionResponse(
+    val latestVersionCode: Int,
+    val latestVersionName: String,
+    val downloadUrl: String
+)
+
 // ══════════════════════════════════════════════════════════
 // INTERFAZ RETROFIT
 // ══════════════════════════════════════════════════════════
@@ -239,6 +245,9 @@ interface NewsickApiService {
 
     @DELETE("api/map/location")
     suspend fun deleteLocation(): retrofit2.Response<Unit>
+
+    @GET("api/version/latest")
+    suspend fun getLatestVersion(): retrofit2.Response<LatestVersionResponse>
 }
 
 // ══════════════════════════════════════════════════════════
