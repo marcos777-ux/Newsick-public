@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Marcos Quintero Hernández. Todos los derechos reservados.
+// Newsick es software propietario. Queda prohibida su copia, modificación,
+// distribución o ingeniería inversa sin autorización expresa del autor.
+
 package com.makro17.newsick
 
 import android.Manifest
@@ -37,7 +41,6 @@ import com.google.android.gms.maps.model.LatLng
 import com.google.android.gms.maps.model.MapStyleOptions
 import com.google.maps.android.compose.*
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 
 // ══════════════════════════════════════════════════════════
 // Estilo de mapa: sin etiquetas de calles ni establecimientos
@@ -74,7 +77,6 @@ fun MapScreen(
     onUserClick: (Int) -> Unit
 ) {
     val context      = LocalContext.current
-    val scope        = rememberCoroutineScope()
 
     var hasPermission by remember {
         mutableStateOf(
@@ -87,16 +89,34 @@ fun MapScreen(
     var selectedUser       by remember { mutableStateOf<NearbyUserResponse?>(null) }
     var showBottomSheet    by remember { mutableStateOf(false) }
     var showPlatformDialog by remember { mutableStateOf(false) }
-    var selectedPlatform   by remember { mutableStateOf("newsick") }
-    // ── Visibilidad en el mapa: desactivada por defecto ────
-    var locationVisible    by remember { mutableStateOf(false) }
+    // "auto" = cualquier plataforma, "no" = ocultar ubicación, o nombre de plataforma específica
+    var selectedPlatform   by remember { mutableStateOf("auto") }
+    // Visibilidad derivada de la selección
+    val locationVisible    = selectedPlatform != "no"
     // ── Canción detectada del sistema ──────────────────────
     var nowPlayingDetected by remember { mutableStateOf<NowPlayingInfo?>(null) }
     var hasNotifAccess     by remember { mutableStateOf(isNotificationListenerEnabled(context)) }
 
     val nearbyUsers = viewModel.nearbyUsers.value
-    // Solo muestra la canción si está siendo detectada en tiempo real — sin fallback
-    val displayTrack = nowPlayingDetected?.let { Pair(it.title, it.artist) }
+
+    // Filtrar la canción mostrada según la plataforma seleccionada
+    val displayTrack: Pair<String, String>? = when {
+        selectedPlatform == "no"           -> null
+        nowPlayingDetected == null         -> null
+        selectedPlatform == "auto"         -> Pair(nowPlayingDetected!!.title, nowPlayingDetected!!.artist)
+        else -> {
+            val pkg = nowPlayingDetected!!.packageName
+            val matches = when (selectedPlatform) {
+                "spotify"     -> "spotify"    in pkg
+                "youtube"     -> "youtube"    in pkg
+                "soundcloud"  -> "soundcloud" in pkg
+                "apple_music" -> "apple"      in pkg
+                "tidal"       -> "tidal"      in pkg
+                else          -> true
+            }
+            if (matches) Pair(nowPlayingDetected!!.title, nowPlayingDetected!!.artist) else null
+        }
+    }
 
     val cameraPositionState = rememberCameraPositionState {
         position = CameraPosition.fromLatLngZoom(LatLng(40.4168, -3.7038), 15f)
@@ -139,11 +159,12 @@ fun MapScreen(
         } catch (_: SecurityException) {}
     }
 
-    // ── Publicar/retirar ubicación al cambiar visibilidad ──
-    LaunchedEffect(locationVisible, currentLatLng) {
+    // ── Publicar/retirar ubicación al cambiar selección ───
+    LaunchedEffect(selectedPlatform, currentLatLng) {
         val ll = currentLatLng ?: return@LaunchedEffect
         if (locationVisible) {
-            viewModel.updateLocationOnMap(ll.latitude, ll.longitude)
+            val platform = if (selectedPlatform == "auto") "newsick" else selectedPlatform
+            viewModel.updateLocationWithPlatform(ll.latitude, ll.longitude, platform)
             viewModel.loadNearbyUsers(ll.latitude, ll.longitude)
         } else {
             viewModel.removeLocationFromMap()
@@ -263,72 +284,74 @@ fun MapScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Chip "Escuchando ahora" — solo canción detectada en tiempo real
+            // Chip "Escuchando ahora" — pulsarlo abre el diálogo de ajustes
             Surface(
                 shape           = RoundedCornerShape(20.dp),
                 color           = MaterialTheme.colorScheme.surface,
                 tonalElevation  = 6.dp,
                 shadowElevation = 4.dp,
-                modifier        = Modifier.clickable {
-                    if (!hasNotifAccess) {
-                        notifSettingsLauncher.launch(
-                            android.content.Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")
-                        )
-                    }
-                }
+                modifier        = Modifier.clickable { showPlatformDialog = true }
             ) {
                 Row(
                     modifier              = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment     = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    if (displayTrack != null) {
-                        // Emoji de la plataforma que se está reproduciendo
-                        val pkg = nowPlayingDetected?.packageName ?: ""
-                        val platEmoji = when {
-                            "spotify"    in pkg -> "🟢"
-                            "youtube"    in pkg -> "🔴"
-                            "soundcloud" in pkg -> "🟠"
-                            "apple"      in pkg -> "🍎"
-                            "tidal"      in pkg -> "🔵"
-                            else                -> "🎵"
-                        }
-                        Text(platEmoji, fontSize = 24.sp)
-                        Column {
-                            Text(
-                                "Escuchando ahora",
-                                style      = MaterialTheme.typography.labelSmall,
-                                color      = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Text(
-                                buildString {
-                                    append(displayTrack.first)
-                                    if (displayTrack.second.isNotBlank()) append(" · ${displayTrack.second}")
-                                },
-                                style      = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold,
-                                maxLines   = 1,
-                                overflow   = TextOverflow.Ellipsis,
-                                modifier   = Modifier.widthIn(max = 200.dp)
-                            )
-                        }
-                        Icon(Icons.Default.MusicNote, null,
-                            Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
-                    } else {
-                        Icon(Icons.Default.MusicOff, null,
-                            Modifier.size(18.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Column {
-                            Text(
-                                if (hasNotifAccess) "Sin canción en reproducción"
-                                else "Detectar música en reproducción",
+                    when {
+                        selectedPlatform == "no" -> {
+                            Icon(Icons.Default.LocationOff, null,
+                                Modifier.size(18.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("Ubicación oculta · Toca para cambiar",
                                 style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            if (!hasNotifAccess) {
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        displayTrack != null -> {
+                            val pkg = nowPlayingDetected?.packageName ?: ""
+                            val platEmoji = when {
+                                "spotify"    in pkg -> "🟢"
+                                "youtube"    in pkg -> "🔴"
+                                "soundcloud" in pkg -> "🟠"
+                                "apple"      in pkg -> "🍎"
+                                "tidal"      in pkg -> "🔵"
+                                else                -> "🎵"
+                            }
+                            Text(platEmoji, fontSize = 24.sp)
+                            Column {
                                 Text(
-                                    "Toca para activar (Spotify, YouTube…)",
+                                    "Escuchando ahora",
+                                    style      = MaterialTheme.typography.labelSmall,
+                                    color      = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    buildString {
+                                        append(displayTrack.first)
+                                        if (displayTrack.second.isNotBlank()) append(" · ${displayTrack.second}")
+                                    },
+                                    style      = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines   = 1,
+                                    overflow   = TextOverflow.Ellipsis,
+                                    modifier   = Modifier.widthIn(max = 200.dp)
+                                )
+                            }
+                            Icon(Icons.Default.MusicNote, null,
+                                Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
+                        }
+                        else -> {
+                            Icon(Icons.Default.MusicOff, null,
+                                Modifier.size(18.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Column {
+                                Text(
+                                    if (hasNotifAccess) "Sin canción en reproducción"
+                                    else "Detectar música en reproducción",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    "Toca para ajustar",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.primary
                                 )
@@ -355,47 +378,6 @@ fun MapScreen(
             }
         }
 
-        // ── Botón visibilidad (bottom-start, junto al FAB de plataforma) ──
-        FloatingActionButton(
-            onClick = {
-                locationVisible = !locationVisible
-                val ll = currentLatLng
-                if (locationVisible && ll != null) {
-                    viewModel.updateLocationOnMap(ll.latitude, ll.longitude)
-                    viewModel.loadNearbyUsers(ll.latitude, ll.longitude)
-                } else {
-                    viewModel.removeLocationFromMap()
-                }
-            },
-            modifier       = Modifier
-                .align(Alignment.BottomStart)
-                .padding(start = 88.dp, bottom = 80.dp),
-            containerColor = if (locationVisible)
-                MaterialTheme.colorScheme.primary
-            else
-                MaterialTheme.colorScheme.surfaceVariant,
-            contentColor   = if (locationVisible)
-                MaterialTheme.colorScheme.onPrimary
-            else
-                MaterialTheme.colorScheme.onSurfaceVariant
-        ) {
-            Icon(
-                if (locationVisible) Icons.Default.LocationOn else Icons.Default.LocationOff,
-                contentDescription = if (locationVisible) "Ocultar ubicación" else "Compartir ubicación"
-            )
-        }
-
-        // FAB plataforma (bottom-start)
-        FloatingActionButton(
-            onClick        = { showPlatformDialog = true },
-            modifier       = Modifier
-                .align(Alignment.BottomStart)
-                .padding(start = 16.dp, bottom = 80.dp),
-            containerColor = MaterialTheme.colorScheme.secondaryContainer,
-            contentColor   = MaterialTheme.colorScheme.onSecondaryContainer
-        ) {
-            Text(getPlatformInfo(selectedPlatform).emoji, fontSize = 22.sp)
-        }
     }
 
     // ══════════════════════════════════════════════════════
@@ -418,18 +400,58 @@ fun MapScreen(
     }
 
     // ══════════════════════════════════════════════════════
-    // DIÁLOGO: selección de plataforma de escucha
+    // DIÁLOGO: ajustes de escucha y visibilidad
     // ══════════════════════════════════════════════════════
     if (showPlatformDialog) {
-        val platforms = listOf("newsick", "spotify", "youtube", "soundcloud", "apple_music", "tidal")
         AlertDialog(
             onDismissRequest = { showPlatformDialog = false },
             title = { Text("¿Dónde escuchas?") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    platforms.forEach { p ->
-                        val info     = getPlatformInfo(p)
-                        val selected = selectedPlatform == p
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+
+                    // ── Activar detección si no hay acceso ────
+                    if (!hasNotifAccess) {
+                        Surface(
+                            shape  = RoundedCornerShape(8.dp),
+                            color  = MaterialTheme.colorScheme.secondaryContainer,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    showPlatformDialog = false
+                                    notifSettingsLauncher.launch(
+                                        android.content.Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")
+                                    )
+                                }
+                                .padding(12.dp)
+                        ) {
+                            Row(
+                                verticalAlignment     = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                modifier = Modifier.padding(4.dp)
+                            ) {
+                                Icon(Icons.Default.NotificationsActive, null,
+                                    Modifier.size(20.dp),
+                                    tint = MaterialTheme.colorScheme.onSecondaryContainer)
+                                Text("Activar detección de música",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer)
+                            }
+                        }
+                        Spacer(Modifier.height(8.dp))
+                    }
+
+                    // ── Opciones de plataforma ─────────────
+                    val options = listOf(
+                        Triple("auto",        "🎵", "Automático"),
+                        Triple("spotify",     "🟢", "Spotify"),
+                        Triple("youtube",     "🔴", "YouTube"),
+                        Triple("soundcloud",  "🟠", "SoundCloud"),
+                        Triple("apple_music", "🍎", "Apple Music"),
+                        Triple("tidal",       "🔵", "Tidal"),
+                        Triple("no",          "🚫", "No compartir")
+                    )
+                    options.forEach { (key, emoji, label) ->
+                        val selected = selectedPlatform == key
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -439,9 +461,13 @@ fun MapScreen(
                                     else Color.Transparent
                                 )
                                 .clickable {
-                                    selectedPlatform = p
-                                    currentLatLng?.let { ll ->
-                                        viewModel.updateLocationWithPlatform(ll.latitude, ll.longitude, p)
+                                    selectedPlatform = key
+                                    val ll = currentLatLng
+                                    if (key == "no") {
+                                        viewModel.removeLocationFromMap()
+                                    } else if (ll != null) {
+                                        val platform = if (key == "auto") "newsick" else key
+                                        viewModel.updateLocationWithPlatform(ll.latitude, ll.longitude, platform)
                                     }
                                     showPlatformDialog = false
                                 }
@@ -449,10 +475,19 @@ fun MapScreen(
                             verticalAlignment     = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            Text(info.emoji, fontSize = 24.sp)
-                            Text(info.label,
-                                style    = MaterialTheme.typography.bodyMedium,
-                                modifier = Modifier.weight(1f))
+                            Text(emoji, fontSize = 22.sp)
+                            Column(Modifier.weight(1f)) {
+                                Text(label, style = MaterialTheme.typography.bodyMedium)
+                                if (key == "auto") {
+                                    Text("Muestra cualquier canción en reproducción",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                } else if (key == "no") {
+                                    Text("Tu ubicación no será visible para nadie",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
                             if (selected) {
                                 Icon(Icons.Default.Check, null,
                                     tint     = MaterialTheme.colorScheme.primary,

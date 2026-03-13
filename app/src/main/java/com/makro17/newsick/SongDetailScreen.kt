@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Marcos Quintero Hernández. Todos los derechos reservados.
+// Newsick es software propietario. Queda prohibida su copia, modificación,
+// distribución o ingeniería inversa sin autorización expresa del autor.
+
 package com.makro17.newsick
 
 import android.media.MediaPlayer
