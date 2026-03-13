@@ -40,7 +40,8 @@ fun UserProfileScreen(
     userId: Int,
     viewModel: MainViewModel,
     onBack: () -> Unit,
-    onSongClick: (String) -> Unit
+    onSongClick: (String) -> Unit,
+    onChatClick: (Int, String, String) -> Unit = { _, _, _ -> }
 ) {
     var user                by remember { mutableStateOf<UserResponse?>(null) }
     var posts               by remember { mutableStateOf<List<PostResponse>>(emptyList()) }
@@ -53,6 +54,8 @@ fun UserProfileScreen(
     var showRemoveConfirm   by remember { mutableStateOf(false) }
     var showRecommendDialog by remember { mutableStateOf(false) }
     var selectedTab         by remember { mutableIntStateOf(0) }
+    var chatPrivacy         by remember { mutableStateOf("everyone") }
+    var isChatLoading       by remember { mutableStateOf(false) }
 
     val isSelf      = userId == viewModel.loggedUserId.value
     val currentUser = user
@@ -71,6 +74,10 @@ fun UserProfileScreen(
             try {
                 val r = NewsickRetrofit.api.getUserRecommendations(userId)
                 if (r.isSuccessful) recommendations = r.body() ?: emptyList()
+            } catch (_: Exception) {}
+            try {
+                val r = NewsickRetrofit.api.getChatPrivacy(userId)
+                if (r.isSuccessful) chatPrivacy = r.body()?.chatPrivacy ?: "everyone"
             } catch (_: Exception) {}
         }
         isLoading = false
@@ -189,6 +196,37 @@ fun UserProfileScreen(
                         OutlinedButton(onClick = { showRecommendDialog = true }) {
                             Icon(Icons.Default.Recommend, null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(4.dp)); Text("Recomendar")
+                        }
+                    }
+                }
+                // Botón enviar mensaje (respeta privacidad)
+                if (chatPrivacy != "nobody") {
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = {
+                            isChatLoading = true
+                            scope.launch {
+                                try {
+                                    val r = NewsickRetrofit.api.getOrCreateChat(userId)
+                                    if (r.isSuccessful) {
+                                        val convId = r.body()?.conversationId ?: -1
+                                        if (convId > 0 && currentUser != null) {
+                                            onChatClick(convId, currentUser!!.username, currentUser!!.profilePhoto ?: "")
+                                        }
+                                    }
+                                } catch (_: Exception) {}
+                                isChatLoading = false
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled  = !isChatLoading
+                    ) {
+                        if (isChatLoading) {
+                            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                        } else {
+                            Icon(Icons.Default.Chat, null, Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Enviar mensaje")
                         }
                     }
                 }

@@ -124,6 +124,40 @@ data class LatestVersionResponse(
     val downloadUrl: String
 )
 
+// Chat
+data class ChatPrivacyUpdateRequest(val chatPrivacy: String)
+data class ChatPrivacyResponse(val chatPrivacy: String)
+data class ConversationIdResponse(val conversationId: Int)
+data class ConversationResponse(
+    val id: Int,
+    val otherUserId: Int,
+    val otherUsername: String,
+    val otherProfilePhoto: String,
+    val lastMessage: String?,
+    val lastMessageType: String?,
+    val lastMessageAt: String?,
+    val unreadCount: Int
+)
+data class MessageResponse(
+    val id: Int,
+    val conversationId: Int,
+    val senderId: Int,
+    val senderUsername: String,
+    val messageType: String,
+    val content: String,
+    val replyToId: Int?,
+    val replyToContent: String?,
+    val replyToSenderUsername: String?,
+    val isAiReply: Boolean,
+    val createdAt: String
+)
+data class SendMessageRequest(
+    val content: String,
+    val messageType: String = "text",
+    val replyToId: Int? = null,
+    val isAiReply: Boolean = false
+)
+
 // ══════════════════════════════════════════════════════════
 // INTERFAZ RETROFIT
 // ══════════════════════════════════════════════════════════
@@ -248,6 +282,37 @@ interface NewsickApiService {
 
     @GET("api/version/latest")
     suspend fun getLatestVersion(): retrofit2.Response<LatestVersionResponse>
+
+    // Chat
+    @GET("api/chats")
+    suspend fun getChats(): retrofit2.Response<List<ConversationResponse>>
+
+    @POST("api/chats/with/{userId}")
+    suspend fun getOrCreateChat(@Path("userId") userId: Int): retrofit2.Response<ConversationIdResponse>
+
+    @GET("api/chats/{conversationId}/messages")
+    suspend fun getChatMessages(@Path("conversationId") conversationId: Int): retrofit2.Response<List<MessageResponse>>
+
+    @POST("api/chats/{conversationId}/messages")
+    suspend fun sendChatMessage(
+        @Path("conversationId") conversationId: Int,
+        @Body r: SendMessageRequest
+    ): retrofit2.Response<Map<String, Int>>
+
+    @DELETE("api/chats/{conversationId}")
+    suspend fun deleteChat(@Path("conversationId") conversationId: Int): retrofit2.Response<Unit>
+
+    @DELETE("api/chats/{conversationId}/messages/{messageId}")
+    suspend fun deleteChatMessage(
+        @Path("conversationId") conversationId: Int,
+        @Path("messageId") messageId: Int
+    ): retrofit2.Response<Unit>
+
+    @GET("api/chats/privacy/{userId}")
+    suspend fun getChatPrivacy(@Path("userId") userId: Int): retrofit2.Response<ChatPrivacyResponse>
+
+    @PUT("api/chats/privacy")
+    suspend fun updateChatPrivacy(@Body r: ChatPrivacyUpdateRequest): retrofit2.Response<Unit>
 }
 
 // ══════════════════════════════════════════════════════════

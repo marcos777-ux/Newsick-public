@@ -43,6 +43,8 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.NavType
+import androidx.navigation.navArgument
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
@@ -631,17 +633,23 @@ fun NewsickApp(windowSize: WindowWidthSizeClass, viewModel: MainViewModel) {
             }
         }
     ) { pad ->
+        val navigateToUser: (Int) -> Unit = { uid ->
+            if (uid == viewModel.loggedUserId.value)
+                navController.navigate("profile") { launchSingleTop = true }
+            else
+                navController.navigate("userProfile/$uid")
+        }
         NavHost(navController, "social", Modifier.padding(pad)) {
             composable("social") {
                 SocialFeedScreen(viewModel,
                     onSongClick          = { navController.navigate("detail/$it") },
                     onUploadClick        = { navController.navigate("upload") },
                     onNotificationsClick = { navController.navigate("notifications") },
-                    onUserClick          = { navController.navigate("userProfile/$it") }
+                    onUserClick          = navigateToUser
                 )
             }
             composable("map") {
-                MapScreen(viewModel, onUserClick = { navController.navigate("userProfile/$it") })
+                MapScreen(viewModel, onUserClick = navigateToUser)
             }
             composable("profile") {
                 ProfileScreen(viewModel,
@@ -655,10 +663,14 @@ fun NewsickApp(windowSize: WindowWidthSizeClass, viewModel: MainViewModel) {
                 SettingsScreen(viewModel = viewModel, onBack = { navController.popBackStack() }, onLogout = { viewModel.logout() })
             }
             composable("friends") {
-                FriendsListScreen(viewModel,
+                FriendsPagerScreen(
+                    viewModel   = viewModel,
                     onBack      = { navController.popBackStack() },
-                    onUserClick = { navController.navigate("userProfile/$it") },
-                    onSongClick = { navController.navigate("detail/$it") }   // nuevo
+                    onUserClick = navigateToUser,
+                    onSongClick = { navController.navigate("detail/$it") },
+                    onChatClick = { convId, username, photo ->
+                        navController.navigate("chat/$convId?username=${Uri.encode(username)}&photo=${Uri.encode(photo)}")
+                    }
                 )
             }
             composable("upload") {
@@ -675,13 +687,35 @@ fun NewsickApp(windowSize: WindowWidthSizeClass, viewModel: MainViewModel) {
                 val uid = back.arguments?.getString("userId")?.toIntOrNull() ?: return@composable
                 UserProfileScreen(uid, viewModel,
                     onBack      = { navController.popBackStack() },
-                    onSongClick = { navController.navigate("detail/$it") }
+                    onSongClick = { navController.navigate("detail/$it") },
+                    onChatClick = { convId, username, photo ->
+                        navController.navigate("chat/$convId?username=${Uri.encode(username)}&photo=${Uri.encode(photo)}")
+                    }
                 )
             }
             composable("notifications") {
                 NotificationsScreen(viewModel,
                     onBack      = { navController.popBackStack() },
-                    onUserClick = { navController.navigate("userProfile/$it") }
+                    onUserClick = navigateToUser
+                )
+            }
+            composable(
+                "chat/{conversationId}?username={username}&photo={photo}",
+                arguments = listOf(
+                    navArgument("conversationId") { type = NavType.IntType },
+                    navArgument("username") { defaultValue = "" },
+                    navArgument("photo")    { defaultValue = "" }
+                )
+            ) { back ->
+                val convId   = back.arguments?.getInt("conversationId") ?: return@composable
+                val username = back.arguments?.getString("username") ?: ""
+                val photo    = back.arguments?.getString("photo") ?: ""
+                ChatScreen(
+                    conversationId    = convId,
+                    otherUsername     = username,
+                    otherProfilePhoto = photo,
+                    viewModel         = viewModel,
+                    onBack            = { navController.popBackStack() }
                 )
             }
         }
@@ -779,6 +813,17 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit, onLogout: () ->
     val context    = LocalContext.current
     val systemDark = isSystemInDarkTheme()
     val darkMode   by viewModel.darkModeOverride
+    val scope      = rememberCoroutineScope()
+    var chatPrivacy   by remember { mutableStateOf("everyone") }
+    var isPrivLoading by remember { mutableStateOf(true) }
+
+    LaunchedEffect(Unit) {
+        try {
+            val r = NewsickRetrofit.api.getChatPrivacy(viewModel.loggedUserId.value)
+            if (r.isSuccessful) chatPrivacy = r.body()?.chatPrivacy ?: "everyone"
+        } catch (_: Exception) {}
+        isPrivLoading = false
+    }
 
     val version = remember {
         try { context.packageManager.getPackageInfo(context.packageName, 0).versionName } catch (_: Exception) { "?" }
@@ -815,6 +860,41 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit, onLogout: () ->
                     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                         RadioButton(selected = darkMode == true, onClick = { viewModel.setDarkMode(true) })
                         Spacer(Modifier.width(8.dp)); Icon(Icons.Default.DarkMode, null, Modifier.size(20.dp)); Spacer(Modifier.width(8.dp)); Text("Modo oscuro")
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(24.dp))
+
+            Text("Mensajes privados", style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(8.dp))
+
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column {
+                    listOf(
+                        "everyone" to "Todos pueden enviarte mensajes",
+                        "friends"  to "Solo amigos",
+                        "nobody"   to "Nadie puede enviarte mensajes"
+                    ).forEachIndexed { i, (key, label) ->
+                        if (i > 0) HorizontalDivider(Modifier.padding(horizontal = 16.dp))
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = chatPrivacy == key,
+                                onClick  = {
+                                    chatPrivacy = key
+                                    scope.launch {
+                                        try { NewsickRetrofit.api.updateChatPrivacy(ChatPrivacyUpdateRequest(key)) }
+                                        catch (_: Exception) {}
+                                    }
+                                }
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(label)
+                        }
                     }
                 }
             }

@@ -57,7 +57,15 @@
 -keep class com.makro17.newsick.FriendSongContributor { *; }
 -keep class com.makro17.newsick.FriendSongEntry       { *; }
 -keep class com.makro17.newsick.ItunesTrack            { *; }
--keep class com.makro17.newsick.ItunesSearchResponse  { *; }
+-keep class com.makro17.newsick.ItunesSearchResponse   { *; }
+
+# Chat
+-keep class com.makro17.newsick.ConversationResponse    { *; }
+-keep class com.makro17.newsick.MessageResponse         { *; }
+-keep class com.makro17.newsick.SendMessageRequest      { *; }
+-keep class com.makro17.newsick.ConversationIdResponse  { *; }
+-keep class com.makro17.newsick.ChatPrivacyResponse     { *; }
+-keep class com.makro17.newsick.ChatPrivacyUpdateRequest { *; }
 
 # ── OkHttp ───────────────────────────────────────────────────────
 -dontwarn okhttp3.**
