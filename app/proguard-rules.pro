@@ -43,14 +43,21 @@
     @retrofit2.http.* <methods>;
 }
 
-# Modelos de datos — mantener nombres de campos para Gson
--keepclassmembers class com.makro17.newsick.**Request    { *; }
--keepclassmembers class com.makro17.newsick.**Response   { *; }
--keepclassmembers class com.makro17.newsick.FeedGroup    { *; }
--keepclassmembers class com.makro17.newsick.FeedPhotoItem { *; }
--keepclassmembers class com.makro17.newsick.NearbyUserResponse { *; }
--keepclassmembers class com.makro17.newsick.NowPlayingInfo { *; }
--keepclassmembers class com.makro17.newsick.PendingUploadTrack { *; }
+# Modelos de datos — mantener clase Y campos para Gson (necesario para deserialización)
+-keep class com.makro17.newsick.**Request    { *; }
+-keep class com.makro17.newsick.**Response   { *; }
+-keep class com.makro17.newsick.FeedGroup    { *; }
+-keep class com.makro17.newsick.FeedPhotoItem { *; }
+-keep class com.makro17.newsick.NearbyUserResponse { *; }
+-keep class com.makro17.newsick.NowPlayingInfo { *; }
+-keep class com.makro17.newsick.PendingUploadTrack { *; }
+
+# Clases anidadas que Gson necesita instanciar (sin estas -> ClassCastException)
+-keep class com.makro17.newsick.RecommenderInfo      { *; }
+-keep class com.makro17.newsick.FriendSongContributor { *; }
+-keep class com.makro17.newsick.FriendSongEntry       { *; }
+-keep class com.makro17.newsick.ItunesTrack            { *; }
+-keep class com.makro17.newsick.ItunesSearchResponse  { *; }
 
 # ── OkHttp ───────────────────────────────────────────────────────
 -dontwarn okhttp3.**
