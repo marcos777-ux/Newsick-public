@@ -79,7 +79,7 @@ fun MapScreen(
     var hasPermission by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
-                == PackageManager.PERMISSION_GRANTED
+                    == PackageManager.PERMISSION_GRANTED
         )
     }
     var mapLoaded          by remember { mutableStateOf(false) }
@@ -95,10 +95,8 @@ fun MapScreen(
     var hasNotifAccess     by remember { mutableStateOf(isNotificationListenerEnabled(context)) }
 
     val nearbyUsers = viewModel.nearbyUsers.value
-    val mySongs     by viewModel.mySongs.collectAsState()
-    // Muestra la canción detectada del sistema; si no, la primera publicada
+    // Solo muestra la canción si está siendo detectada en tiempo real — sin fallback
     val displayTrack = nowPlayingDetected?.let { Pair(it.title, it.artist) }
-        ?: mySongs.firstOrNull()?.let { Pair(it.trackName, it.artistName) }
 
     val cameraPositionState = rememberCameraPositionState {
         position = CameraPosition.fromLatLngZoom(LatLng(40.4168, -3.7038), 15f)
@@ -113,11 +111,13 @@ fun MapScreen(
         ActivityResultContracts.StartActivityForResult()
     ) { hasNotifAccess = isNotificationListenerEnabled(context) }
 
-    // ── Detectar canción en reproducción cada 5 s ─────────
+    // ── Detectar canción en reproducción: al entrar y cada 5 s ─
     LaunchedEffect(hasNotifAccess) {
         while (true) {
             if (hasNotifAccess) {
                 nowPlayingDetected = getNowPlayingInfo(context)
+            } else {
+                nowPlayingDetected = null
             }
             delay(5_000)
         }
@@ -263,7 +263,7 @@ fun MapScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Chip "Escuchando ahora" — canción detectada del sistema o publicada
+            // Chip "Escuchando ahora" — solo canción detectada en tiempo real
             Surface(
                 shape           = RoundedCornerShape(20.dp),
                 color           = MaterialTheme.colorScheme.surface,
@@ -271,7 +271,6 @@ fun MapScreen(
                 shadowElevation = 4.dp,
                 modifier        = Modifier.clickable {
                     if (!hasNotifAccess) {
-                        // Abrir ajustes de acceso a notificaciones
                         notifSettingsLauncher.launch(
                             android.content.Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")
                         )
@@ -284,27 +283,17 @@ fun MapScreen(
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     if (displayTrack != null) {
-                        val artwork = mySongs.firstOrNull()?.artworkUrl
-                        if (artwork != null && nowPlayingDetected == null) {
-                            AsyncImage(
-                                model              = artwork,
-                                contentDescription = null,
-                                modifier           = Modifier.size(32.dp).clip(RoundedCornerShape(6.dp)),
-                                contentScale       = ContentScale.Crop
-                            )
-                        } else {
-                            // Icono de la plataforma detectada
-                            val pkg = nowPlayingDetected?.packageName ?: ""
-                            val platEmoji = when {
-                                "spotify"    in pkg -> "🟢"
-                                "youtube"    in pkg -> "🔴"
-                                "soundcloud" in pkg -> "🟠"
-                                "apple"      in pkg -> "🍎"
-                                "tidal"      in pkg -> "🔵"
-                                else                -> "🎵"
-                            }
-                            Text(platEmoji, fontSize = 24.sp)
+                        // Emoji de la plataforma que se está reproduciendo
+                        val pkg = nowPlayingDetected?.packageName ?: ""
+                        val platEmoji = when {
+                            "spotify"    in pkg -> "🟢"
+                            "youtube"    in pkg -> "🔴"
+                            "soundcloud" in pkg -> "🟠"
+                            "apple"      in pkg -> "🍎"
+                            "tidal"      in pkg -> "🔵"
+                            else                -> "🎵"
                         }
+                        Text(platEmoji, fontSize = 24.sp)
                         Column {
                             Text(
                                 "Escuchando ahora",
@@ -317,11 +306,11 @@ fun MapScreen(
                                     append(displayTrack.first)
                                     if (displayTrack.second.isNotBlank()) append(" · ${displayTrack.second}")
                                 },
-                                style    = MaterialTheme.typography.labelMedium,
+                                style      = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.widthIn(max = 200.dp)
+                                maxLines   = 1,
+                                overflow   = TextOverflow.Ellipsis,
+                                modifier   = Modifier.widthIn(max = 200.dp)
                             )
                         }
                         Icon(Icons.Default.MusicNote, null,
@@ -332,13 +321,14 @@ fun MapScreen(
                             tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         Column {
                             Text(
-                                "Sin canción detectada",
+                                if (hasNotifAccess) "Sin canción en reproducción"
+                                else "Detectar música en reproducción",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             if (!hasNotifAccess) {
                                 Text(
-                                    "Toca para activar detección",
+                                    "Toca para activar (Spotify, YouTube…)",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.primary
                                 )
@@ -365,7 +355,7 @@ fun MapScreen(
             }
         }
 
-        // ── Botón visibilidad (bottom-end) ─────────────────
+        // ── Botón visibilidad (bottom-start, junto al FAB de plataforma) ──
         FloatingActionButton(
             onClick = {
                 locationVisible = !locationVisible
@@ -378,8 +368,8 @@ fun MapScreen(
                 }
             },
             modifier       = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(end = 16.dp, bottom = 24.dp),
+                .align(Alignment.BottomStart)
+                .padding(start = 88.dp, bottom = 80.dp),
             containerColor = if (locationVisible)
                 MaterialTheme.colorScheme.primary
             else
@@ -400,7 +390,7 @@ fun MapScreen(
             onClick        = { showPlatformDialog = true },
             modifier       = Modifier
                 .align(Alignment.BottomStart)
-                .padding(start = 16.dp, bottom = 24.dp),
+                .padding(start = 16.dp, bottom = 80.dp),
             containerColor = MaterialTheme.colorScheme.secondaryContainer,
             contentColor   = MaterialTheme.colorScheme.onSecondaryContainer
         ) {
@@ -636,7 +626,7 @@ fun UserMusicCard(
                         ) {
                             Icon(
                                 imageVector        = if (isPlaying) Icons.Default.Pause
-                                                     else Icons.Default.PlayArrow,
+                                else Icons.Default.PlayArrow,
                                 contentDescription = if (isPlaying) "Pausar" else "Escuchar preview",
                                 tint               = MaterialTheme.colorScheme.primary,
                                 modifier           = Modifier.size(34.dp)

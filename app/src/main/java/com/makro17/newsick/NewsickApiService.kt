@@ -37,7 +37,7 @@ data class PhotoResponse(
 data class FeedPhotoItem(
     val photoId: Int, val photoUri: String,
     val trackId: String, val trackName: String, val artistName: String, val artworkUrl: String,
-    val userId: Int, val username: String, val timestamp: Long
+    val userId: Int, val username: String, val profilePhotoUrl: String = "", val timestamp: Long
 )
 // Grupo de fotos agrupadas por canción (construido en el cliente)
 data class FeedGroup(

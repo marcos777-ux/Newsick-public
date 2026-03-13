@@ -1,9 +1,13 @@
 package com.makro17.newsick
 
-import android.R.string.ok
 import android.media.MediaPlayer
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.grid.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -14,14 +18,19 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 // ══════════════════════════════════════════════════════════
-// DETALLE DE CANCIÓN
+// DETALLE DE CANCIÓN — álbum de fotos con swipe fullscreen
 // ══════════════════════════════════════════════════════════
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -31,12 +40,12 @@ fun SongDetailScreen(
     viewModel: MainViewModel,
     onBack: () -> Unit
 ) {
-    var photos        by remember { mutableStateOf<List<PhotoResponse>>(emptyList()) }
-    var isLoading     by remember { mutableStateOf(true) }
-    var song          by remember { mutableStateOf<SongPostEntity?>(null) }
-    var photoToDelete by remember { mutableStateOf<PhotoResponse?>(null) }
+    var photos          by remember { mutableStateOf<List<PhotoResponse>>(emptyList()) }
+    var isLoading       by remember { mutableStateOf(true) }
+    var song            by remember { mutableStateOf<SongPostEntity?>(null) }
+    var photoToDelete   by remember { mutableStateOf<PhotoResponse?>(null) }
+    var fullscreenIndex by remember { mutableStateOf<Int?>(null) }
 
-    // Reproductor iTunes
     var previewUrl  by remember { mutableStateOf<String?>(null) }
     var mediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
     var isPlaying   by remember { mutableStateOf(false) }
@@ -49,12 +58,11 @@ fun SongDetailScreen(
         onDispose { mediaPlayer?.stop(); mediaPlayer?.release(); mediaPlayer = null }
     }
 
-    // Carga inicial
+    // Carga inicial — fotos ordenadas newest-first por el backend
     LaunchedEffect(trackId) {
         isLoading = true
         song      = viewModel.getSongPost(trackId)
         photos    = viewModel.getMixedPhotos(trackId)
-
         trackId.toLongOrNull()?.let { numId ->
             try {
                 val res = withContext(Dispatchers.IO) { ItunesRetrofit.api.lookupTrack(numId) }
@@ -64,7 +72,6 @@ fun SongDetailScreen(
         isLoading = false
     }
 
-    // Preparar MediaPlayer
     LaunchedEffect(previewUrl) {
         val url = previewUrl ?: return@LaunchedEffect
         withContext(Dispatchers.IO) {
@@ -81,12 +88,11 @@ fun SongDetailScreen(
         }
     }
 
-    // Confirmación de borrado
     photoToDelete?.let { p ->
         AlertDialog(
             onDismissRequest = { photoToDelete = null },
             title   = { Text("Eliminar foto") },
-            text    = { Text("¿Seguro que quieres eliminar esta foto? No se puede deshacer.") },
+            text    = { Text("¿Seguro que quieres eliminar esta foto?") },
             confirmButton = {
                 Button(
                     onClick = {
@@ -94,9 +100,7 @@ fun SongDetailScreen(
                             if (success) {
                                 photos = photos.filter { it.id != p.id }
                                 if (photos.isEmpty()) {
-                                    mediaPlayer?.stop()
-                                    mediaPlayer?.release()
-                                    mediaPlayer = null
+                                    mediaPlayer?.stop(); mediaPlayer?.release(); mediaPlayer = null
                                     onBack()
                                 }
                             }
@@ -106,9 +110,16 @@ fun SongDetailScreen(
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                 ) { Text("Eliminar") }
             },
-            dismissButton = {
-                TextButton(onClick = { photoToDelete = null }) { Text("Cancelar") }
-            }
+            dismissButton = { TextButton(onClick = { photoToDelete = null }) { Text("Cancelar") } }
+        )
+    }
+
+    // Visor fullscreen con swipe horizontal
+    fullscreenIndex?.let { startPage ->
+        PhotoFullscreenViewerDetail(
+            photos      = photos,
+            initialPage = startPage,
+            onDismiss   = { fullscreenIndex = null }
         )
     }
 
@@ -125,165 +136,228 @@ fun SongDetailScreen(
             )
         }
     ) { pad ->
-        Column(Modifier.padding(pad).fillMaxSize()) {
+        if (isLoading) {
+            Box(Modifier.fillMaxSize().padding(pad), Alignment.Center) {
+                CircularProgressIndicator()
+            }
+            return@Scaffold
+        }
 
-            // ── Cabecera: portada + play/pause ─────────────
-            song?.let { s ->
-                Card(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.primaryContainer)
-                ) {
-                    Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+        LazyColumn(
+            modifier       = Modifier.fillMaxSize().padding(pad),
+            contentPadding = PaddingValues(bottom = 16.dp)
+        ) {
 
-                        Box(Modifier.size(90.dp)) {
-                            AsyncImage(s.artworkUrl, null,
-                                Modifier.fillMaxSize().clip(RoundedCornerShape(12.dp)),
-                                contentScale = ContentScale.Crop)
-
-                            if (previewUrl != null && !playerError) {
-                                Surface(
-                                    modifier = Modifier.align(Alignment.Center).size(38.dp),
-                                    shape = CircleShape,
-                                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
-                                    tonalElevation = 4.dp
-                                ) {
-                                    Box(Modifier.fillMaxSize(), Alignment.Center) {
-                                        if (!playerReady) {
-                                            CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                                        } else {
-                                            IconButton(
-                                                onClick = {
-                                                    val mp = mediaPlayer ?: return@IconButton
-                                                    if (isPlaying) { mp.pause(); isPlaying = false }
-                                                    else { mp.start(); isPlaying = true }
-                                                },
-                                                modifier = Modifier.fillMaxSize()
-                                            ) {
-                                                Icon(
-                                                    if (isPlaying) Icons.Default.Pause
-                                                    else Icons.Default.PlayArrow,
-                                                    null,
-                                                    tint = MaterialTheme.colorScheme.primary,
-                                                    modifier = Modifier.size(24.dp)
-                                                )
+            // Cabecera: portada + info + play
+            item {
+                song?.let { s ->
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer)
+                    ) {
+                        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Box(Modifier.size(80.dp)) {
+                                AsyncImage(
+                                    s.artworkUrl, null,
+                                    Modifier.fillMaxSize().clip(RoundedCornerShape(12.dp)),
+                                    contentScale = ContentScale.Crop
+                                )
+                                if (previewUrl != null && !playerError) {
+                                    Surface(
+                                        modifier       = Modifier.align(Alignment.Center).size(34.dp),
+                                        shape          = CircleShape,
+                                        color          = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
+                                        tonalElevation = 4.dp
+                                    ) {
+                                        Box(Modifier.fillMaxSize(), Alignment.Center) {
+                                            if (!playerReady) {
+                                                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                                            } else {
+                                                IconButton(
+                                                    onClick = {
+                                                        val mp = mediaPlayer ?: return@IconButton
+                                                        if (isPlaying) { mp.pause(); isPlaying = false }
+                                                        else { mp.start(); isPlaying = true }
+                                                    },
+                                                    modifier = Modifier.fillMaxSize()
+                                                ) {
+                                                    Icon(
+                                                        if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                                        null,
+                                                        tint = MaterialTheme.colorScheme.primary
+                                                    )
+                                                }
                                             }
                                         }
                                     }
                                 }
                             }
-                        }
-
-                        Spacer(Modifier.width(16.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(s.trackName, style = MaterialTheme.typography.titleMedium)
-                            Text(s.artistName, style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Spacer(Modifier.height(4.dp))
-                            when {
-                                playerError           -> Text("Preview no disponible",
-                                    style = MaterialTheme.typography.labelSmall,
+                            Spacer(Modifier.width(14.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(s.trackName, style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold)
+                                Text(s.artistName, style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                previewUrl == null && !isLoading -> Text("Sin preview de iTunes",
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    "${photos.size} foto(s) · ${photos.map { it.username }.distinct().size} persona(s)",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                isPlaying             -> Text("▶ Reproduciendo (30 s)",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.primary)
-                                playerReady           -> Text("Pulsa ▶ para escuchar 30 s",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             }
-                            Spacer(Modifier.height(4.dp))
-                            Text("${photos.size} foto(s) · ${photos.map { it.username }.distinct().size} persona(s)",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 }
             }
 
-            // ── Grid de fotos ──────────────────────────────
-            when {
-                isLoading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-                    CircularProgressIndicator()
-                }
-                photos.isEmpty() -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.Default.PhotoLibrary, null,
-                            Modifier.size(56.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(Modifier.height(8.dp))
-                        Text("Aún no hay fotos", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            // Fotos en lista vertical, más recientes primero
+            if (photos.isEmpty()) {
+                item {
+                    Box(Modifier.fillMaxWidth().padding(top = 48.dp), Alignment.Center) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(Icons.Default.PhotoLibrary, null,
+                                Modifier.size(56.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.height(8.dp))
+                            Text("Aún no hay fotos",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     }
                 }
-                else -> LazyVerticalGrid(
-                    columns = GridCells.Fixed(2),
-                    modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement   = Arrangement.spacedBy(8.dp),
-                    contentPadding        = PaddingValues(vertical = 8.dp)
-                ) {
-                    items(photos, key = { it.id }) { photo ->
-                        PhotoCard(
-                            photo     = photo,
-                            isOwn     = photo.userId == myId,
-                            onDelete  = { photoToDelete = photo }
-                        )
-                    }
+            } else {
+                itemsIndexed(photos, key = { _, p -> p.id }) { index, photo ->
+                    PhotoListItem(
+                        photo    = photo,
+                        isOwn    = photo.userId == myId,
+                        onDelete = { photoToDelete = photo },
+                        onClick  = { fullscreenIndex = index }
+                    )
+                    Spacer(Modifier.height(2.dp))
                 }
             }
         }
     }
 }
 
-// ── Tarjeta de foto ───────────────────────────────────────
+// ── Foto en lista: ancho completo, tap → fullscreen ───────
 
 @Composable
-private fun PhotoCard(
+private fun PhotoListItem(
     photo: PhotoResponse,
     isOwn: Boolean,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onClick: () -> Unit
 ) {
-    Card(modifier = Modifier.aspectRatio(1f)) {
-        Box(Modifier.fillMaxSize()) {
-            AsyncImage(
-                photo.photoUri, null,
-                Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop
-            )
-
-            // Badge con nombre
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(1f)
+            .clickable { onClick() }
+    ) {
+        AsyncImage(
+            model              = NewsickRetrofit.absoluteUrl(photo.photoUri),
+            contentDescription = null,
+            modifier           = Modifier.fillMaxSize(),
+            contentScale       = ContentScale.Crop
+        )
+        Row(
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .fillMaxWidth()
+                .background(Color.Black.copy(alpha = 0.45f))
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(Icons.Default.AccountCircle, null,
+                modifier = Modifier.size(16.dp), tint = Color.White)
+            Spacer(Modifier.width(4.dp))
+            Text(photo.username, style = MaterialTheme.typography.labelMedium,
+                color = Color.White, modifier = Modifier.weight(1f),
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(timeAgo(photo.timestamp),
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White.copy(alpha = 0.8f))
+        }
+        if (isOwn) {
             Surface(
-                modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth(),
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.78f)
+                modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).size(30.dp),
+                shape    = CircleShape,
+                color    = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.92f)
             ) {
-                Row(Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
-                    verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.AccountCircle, null,
-                        Modifier.size(14.dp), tint = MaterialTheme.colorScheme.primary)
-                    Spacer(Modifier.width(4.dp))
-                    Text(photo.username, style = MaterialTheme.typography.labelSmall,
-                        modifier = Modifier.weight(1f))
+                IconButton(onClick = onDelete, Modifier.fillMaxSize()) {
+                    Icon(Icons.Default.DeleteOutline, "Eliminar",
+                        Modifier.size(17.dp),
+                        tint = MaterialTheme.colorScheme.onErrorContainer)
                 }
             }
+        }
+    }
+}
 
-            // Botón borrar — solo en fotos propias
-            if (isOwn) {
-                Surface(
+// ── Visor a pantalla completa con swipe horizontal ────────
+
+@Composable
+private fun PhotoFullscreenViewerDetail(
+    photos: List<PhotoResponse>,
+    initialPage: Int,
+    onDismiss: () -> Unit
+) {
+    val pagerState   = rememberPagerState(initialPage) { photos.size }
+    val currentPhoto = photos.getOrNull(pagerState.currentPage)
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties       = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(Modifier.fillMaxSize().background(Color.Black)) {
+            HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
+                AsyncImage(
+                    model              = NewsickRetrofit.absoluteUrl(photos[page].photoUri),
+                    contentDescription = null,
+                    modifier           = Modifier.fillMaxSize(),
+                    contentScale       = ContentScale.Fit
+                )
+            }
+            // Barra superior: cerrar + contador
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color.Black.copy(alpha = 0.5f))
+                    .padding(8.dp)
+                    .align(Alignment.TopStart),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Cerrar", tint = Color.White)
+                }
+                Spacer(Modifier.weight(1f))
+                Text(
+                    "${pagerState.currentPage + 1} / ${photos.size}",
+                    style    = MaterialTheme.typography.labelSmall,
+                    color    = Color.White.copy(alpha = 0.8f),
+                    modifier = Modifier.padding(end = 8.dp)
+                )
+            }
+            // Barra inferior: usuario + tiempo
+            currentPhoto?.let { photo ->
+                Row(
                     modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(4.dp)
-                        .size(30.dp),
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.92f)
+                        .fillMaxWidth()
+                        .background(Color.Black.copy(alpha = 0.5f))
+                        .padding(horizontal = 16.dp, vertical = 10.dp)
+                        .align(Alignment.BottomStart),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    IconButton(onClick = onDelete, Modifier.fillMaxSize()) {
-                        Icon(
-                            Icons.Default.DeleteOutline, "Eliminar",
-                            Modifier.size(17.dp),
-                            tint = MaterialTheme.colorScheme.onErrorContainer
-                        )
-                    }
+                    Icon(Icons.Default.AccountCircle, null,
+                        modifier = Modifier.size(20.dp), tint = Color.White)
+                    Spacer(Modifier.width(6.dp))
+                    Text(photo.username, style = MaterialTheme.typography.bodyMedium,
+                        color = Color.White, modifier = Modifier.weight(1f))
+                    Text(timeAgo(photo.timestamp),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White.copy(alpha = 0.75f))
                 }
             }
         }

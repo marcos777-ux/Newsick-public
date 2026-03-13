@@ -265,8 +265,17 @@ fun SongPhotoCard(
                         .padding(horizontal = 10.dp, vertical = 6.dp)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.AccountCircle, null,
-                            modifier = Modifier.size(16.dp), tint = Color.White)
+                        val profileUrl = NewsickRetrofit.absoluteUrl(photo.profilePhotoUrl)
+                        if (profileUrl.isNotBlank()) {
+                            AsyncImage(
+                                model = profileUrl, contentDescription = null,
+                                modifier = Modifier.size(18.dp).clip(CircleShape),
+                                contentScale = ContentScale.Crop
+                            )
+                        } else {
+                            Icon(Icons.Default.AccountCircle, null,
+                                modifier = Modifier.size(18.dp), tint = Color.White)
+                        }
                         Spacer(Modifier.width(4.dp))
                         Text(photo.username, style = MaterialTheme.typography.labelMedium,
                             color = Color.White, modifier = Modifier.weight(1f),
