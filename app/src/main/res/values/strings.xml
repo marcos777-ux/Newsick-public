@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">Newsick</string>
+    <string name="notification_listener_description">Newsick necesita este permiso para detectar la música que estás escuchando</string>
 </resources>
