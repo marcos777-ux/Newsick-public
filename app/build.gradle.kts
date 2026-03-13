@@ -14,19 +14,30 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = 3
-        versionName = "3.4"
+        versionName = "3.4.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
         release {
-            isMinifyEnabled   = true    // era false
-            isShrinkResources = true    // añadir esta línea
+            isMinifyEnabled   = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
         }
+    }
+
+    applicationVariants.all {
+        val variant = this
+        variant.outputs
+            .map { it as com.android.build.gradle.internal.api.BaseVariantOutputImpl }
+            .forEach { output ->
+                if (variant.buildType.name == "release") {
+                    output.outputFileName = "Newsick-v${variant.versionName}.apk"
+                }
+            }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
