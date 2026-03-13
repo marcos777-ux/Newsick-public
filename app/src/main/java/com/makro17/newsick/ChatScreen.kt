@@ -156,10 +156,12 @@ suspend fun callAi(config: AiConfig, chatHistory: List<MessageResponse>, replyTo
 @Composable
 fun ChatScreen(
     conversationId: Int,
+    otherUserId: Int,
     otherUsername: String,
     otherProfilePhoto: String,
     viewModel: MainViewModel,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onUserClick: (Int) -> Unit = {}
 ) {
     val context    = LocalContext.current
     val scope      = rememberCoroutineScope()
@@ -302,7 +304,10 @@ fun ChatScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.clickable { onUserClick(otherUserId) }
+                    ) {
                         val photoUrl = NewsickRetrofit.absoluteUrl(otherProfilePhoto)
                         if (photoUrl.isNotBlank()) {
                             AsyncImage(
@@ -325,11 +330,6 @@ fun ChatScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { showAiConfig = true }) {
-                        Icon(Icons.Default.SmartToy, "Configurar IA",
-                            tint = if (loadAiConfig(context) != null) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
                     // Menú eliminar chat
                     var showDeleteConfirm by remember { mutableStateOf(false) }
                     IconButton(onClick = { showDeleteConfirm = true }) {
@@ -706,18 +706,25 @@ private fun VideoMessageItem(url: String) {
 // DIÁLOGO CONFIGURACIÓN IA
 // ══════════════════════════════════════════════════════════
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AiConfigDialog(context: Context, onDismiss: () -> Unit) {
     val current  = loadAiConfig(context)
     var provider by remember { mutableStateOf(current?.provider ?: "openai") }
     var apiKey   by remember { mutableStateOf(current?.apiKey ?: "") }
     var model    by remember { mutableStateOf(current?.model ?: "") }
+    var modelMenuExpanded by remember { mutableStateOf(false) }
 
     val modelSuggestions = when (provider) {
         "openai"    -> listOf("gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo")
         "anthropic" -> listOf("claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-opus-4-6")
         "google"    -> listOf("gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash")
         else        -> emptyList()
+    }
+
+    // Si el modelo actual no está en la lista del nuevo proveedor, resetear
+    LaunchedEffect(provider) {
+        if (model !in modelSuggestions) model = modelSuggestions.firstOrNull() ?: ""
     }
 
     AlertDialog(
@@ -740,16 +747,31 @@ fun AiConfigDialog(context: Context, onDismiss: () -> Unit) {
                     label = { Text("API Key") },
                     modifier = Modifier.fillMaxWidth(), singleLine = true
                 )
-                OutlinedTextField(
-                    value = model, onValueChange = { model = it },
-                    label = { Text("Modelo") },
-                    modifier = Modifier.fillMaxWidth(), singleLine = true,
-                    supportingText = {
-                        Text(modelSuggestions.joinToString(" · "),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                // Selector de modelo con dropdown
+                ExposedDropdownMenuBox(
+                    expanded = modelMenuExpanded,
+                    onExpandedChange = { modelMenuExpanded = it }
+                ) {
+                    OutlinedTextField(
+                        value = model,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Modelo") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = modelMenuExpanded) },
+                        modifier = Modifier.fillMaxWidth().menuAnchor()
+                    )
+                    ExposedDropdownMenu(
+                        expanded = modelMenuExpanded,
+                        onDismissRequest = { modelMenuExpanded = false }
+                    ) {
+                        modelSuggestions.forEach { suggestion ->
+                            DropdownMenuItem(
+                                text = { Text(suggestion) },
+                                onClick = { model = suggestion; modelMenuExpanded = false }
+                            )
+                        }
                     }
-                )
+                }
             }
         },
         confirmButton = {

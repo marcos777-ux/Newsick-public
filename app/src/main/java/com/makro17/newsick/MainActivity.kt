@@ -17,7 +17,9 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
@@ -656,6 +658,7 @@ fun NewsickApp(windowSize: WindowWidthSizeClass, viewModel: MainViewModel) {
                     onSettingsClick = { navController.navigate("settings") },
                     onSongClick     = { navController.navigate("detail/$it") },
                     onFriendsClick  = { navController.navigate("friends") },
+                    onUserClick     = navigateToUser,
                     onUploadClick   = { navController.navigate("upload") }
                 )
             }
@@ -668,8 +671,8 @@ fun NewsickApp(windowSize: WindowWidthSizeClass, viewModel: MainViewModel) {
                     onBack      = { navController.popBackStack() },
                     onUserClick = navigateToUser,
                     onSongClick = { navController.navigate("detail/$it") },
-                    onChatClick = { convId, username, photo ->
-                        navController.navigate("chat/$convId?username=${Uri.encode(username)}&photo=${Uri.encode(photo)}")
+                    onChatClick = { convId, username, photo, otherUid ->
+                        navController.navigate("chat/$convId/$otherUid?username=${Uri.encode(username)}&photo=${Uri.encode(photo)}")
                     }
                 )
             }
@@ -688,8 +691,8 @@ fun NewsickApp(windowSize: WindowWidthSizeClass, viewModel: MainViewModel) {
                 UserProfileScreen(uid, viewModel,
                     onBack      = { navController.popBackStack() },
                     onSongClick = { navController.navigate("detail/$it") },
-                    onChatClick = { convId, username, photo ->
-                        navController.navigate("chat/$convId?username=${Uri.encode(username)}&photo=${Uri.encode(photo)}")
+                    onChatClick = { convId, username, photo, otherUid ->
+                        navController.navigate("chat/$convId/$otherUid?username=${Uri.encode(username)}&photo=${Uri.encode(photo)}")
                     }
                 )
             }
@@ -700,22 +703,26 @@ fun NewsickApp(windowSize: WindowWidthSizeClass, viewModel: MainViewModel) {
                 )
             }
             composable(
-                "chat/{conversationId}?username={username}&photo={photo}",
+                "chat/{conversationId}/{otherUserId}?username={username}&photo={photo}",
                 arguments = listOf(
                     navArgument("conversationId") { type = NavType.IntType },
+                    navArgument("otherUserId")    { type = NavType.IntType },
                     navArgument("username") { defaultValue = "" },
                     navArgument("photo")    { defaultValue = "" }
                 )
             ) { back ->
-                val convId   = back.arguments?.getInt("conversationId") ?: return@composable
-                val username = back.arguments?.getString("username") ?: ""
-                val photo    = back.arguments?.getString("photo") ?: ""
+                val convId      = back.arguments?.getInt("conversationId") ?: return@composable
+                val otherUid    = back.arguments?.getInt("otherUserId") ?: 0
+                val username    = back.arguments?.getString("username") ?: ""
+                val photo       = back.arguments?.getString("photo") ?: ""
                 ChatScreen(
                     conversationId    = convId,
+                    otherUserId       = otherUid,
                     otherUsername     = username,
                     otherProfilePhoto = photo,
                     viewModel         = viewModel,
-                    onBack            = { navController.popBackStack() }
+                    onBack            = { navController.popBackStack() },
+                    onUserClick       = navigateToUser
                 )
             }
         }
@@ -815,110 +822,267 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit, onLogout: () ->
     val darkMode   by viewModel.darkModeOverride
     val scope      = rememberCoroutineScope()
     var chatPrivacy   by remember { mutableStateOf("everyone") }
-    var isPrivLoading by remember { mutableStateOf(true) }
+    var showAiConfig  by remember { mutableStateOf(false) }
+    var selectedTab   by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(Unit) {
         try {
             val r = NewsickRetrofit.api.getChatPrivacy(viewModel.loggedUserId.value)
             if (r.isSuccessful) chatPrivacy = r.body()?.chatPrivacy ?: "everyone"
         } catch (_: Exception) {}
-        isPrivLoading = false
     }
 
     val version = remember {
         try { context.packageManager.getPackageInfo(context.packageName, 0).versionName } catch (_: Exception) { "?" }
     }
 
-    Scaffold(topBar = {
-        TopAppBar(title = { Text("Configuración") },
-            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Volver") } })
-    }) { pad ->
-        Column(Modifier.fillMaxSize().padding(pad).padding(horizontal = 24.dp)) {
-            Spacer(Modifier.height(24.dp))
-            Text("Newsick", style = MaterialTheme.typography.headlineLarge, color = MaterialTheme.colorScheme.primary)
-            Spacer(Modifier.height(32.dp))
+    if (showAiConfig) {
+        AiConfigDialog(context = context, onDismiss = { showAiConfig = false })
+    }
 
-            Text("Apariencia", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.height(8.dp))
-
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column {
-                    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                        RadioButton(selected = darkMode == null, onClick = { viewModel.setDarkMode(null) })
-                        Spacer(Modifier.width(8.dp))
-                        Column {
-                            Text("Automático (sistema)")
-                            Text("Actualmente: ${if (systemDark) "oscuro" else "claro"}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Scaffold(
+        topBar = {
+            Column {
+                TopAppBar(
+                    title = { Text("Configuración") },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "Volver")
                         }
                     }
-                    HorizontalDivider(Modifier.padding(horizontal = 16.dp))
-                    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                        RadioButton(selected = darkMode == false, onClick = { viewModel.setDarkMode(false) })
-                        Spacer(Modifier.width(8.dp)); Icon(Icons.Default.LightMode, null, Modifier.size(20.dp)); Spacer(Modifier.width(8.dp)); Text("Modo claro")
-                    }
-                    HorizontalDivider(Modifier.padding(horizontal = 16.dp))
-                    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                        RadioButton(selected = darkMode == true, onClick = { viewModel.setDarkMode(true) })
-                        Spacer(Modifier.width(8.dp)); Icon(Icons.Default.DarkMode, null, Modifier.size(20.dp)); Spacer(Modifier.width(8.dp)); Text("Modo oscuro")
-                    }
+                )
+                TabRow(selectedTabIndex = selectedTab) {
+                    Tab(
+                        selected = selectedTab == 0,
+                        onClick  = { selectedTab = 0 },
+                        text     = { Text("Apariencia") },
+                        icon     = { Icon(Icons.Default.Palette, null, Modifier.size(18.dp)) }
+                    )
+                    Tab(
+                        selected = selectedTab == 1,
+                        onClick  = { selectedTab = 1 },
+                        text     = { Text("Privacidad") },
+                        icon     = { Icon(Icons.Default.Lock, null, Modifier.size(18.dp)) }
+                    )
+                    Tab(
+                        selected = selectedTab == 2,
+                        onClick  = { selectedTab = 2 },
+                        text     = { Text("IA") },
+                        icon     = { Icon(Icons.Default.SmartToy, null, Modifier.size(18.dp)) }
+                    )
+                    Tab(
+                        selected = selectedTab == 3,
+                        onClick  = { selectedTab = 3 },
+                        text     = { Text("Cuenta") },
+                        icon     = { Icon(Icons.Default.ManageAccounts, null, Modifier.size(18.dp)) }
+                    )
                 }
             }
+        }
+    ) { pad ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(pad)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp, vertical = 24.dp)
+        ) {
+            when (selectedTab) {
 
-            Spacer(Modifier.height(24.dp))
+                // ── Pestaña 0: Apariencia ──────────────────
+                0 -> {
+                    Text("Apariencia",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.height(16.dp))
+                    Text("Tema", style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(8.dp))
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column {
+                            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically) {
+                                RadioButton(selected = darkMode == null, onClick = { viewModel.setDarkMode(null) })
+                                Spacer(Modifier.width(8.dp))
+                                Column {
+                                    Text("Automático (sistema)")
+                                    Text("Actualmente: ${if (systemDark) "oscuro" else "claro"}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                            HorizontalDivider(Modifier.padding(horizontal = 16.dp))
+                            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically) {
+                                RadioButton(selected = darkMode == false, onClick = { viewModel.setDarkMode(false) })
+                                Spacer(Modifier.width(8.dp))
+                                Icon(Icons.Default.LightMode, null, Modifier.size(20.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text("Modo claro")
+                            }
+                            HorizontalDivider(Modifier.padding(horizontal = 16.dp))
+                            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically) {
+                                RadioButton(selected = darkMode == true, onClick = { viewModel.setDarkMode(true) })
+                                Spacer(Modifier.width(8.dp))
+                                Icon(Icons.Default.DarkMode, null, Modifier.size(20.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text("Modo oscuro")
+                            }
+                        }
+                    }
+                }
 
-            Text("Mensajes privados", style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.height(8.dp))
+                // ── Pestaña 1: Privacidad ──────────────────
+                1 -> {
+                    Text("Privacidad",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.height(16.dp))
+                    Text("Mensajes privados", style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(8.dp))
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column {
+                            listOf(
+                                "everyone" to "Todos pueden enviarte mensajes",
+                                "friends"  to "Solo amigos",
+                                "nobody"   to "Nadie puede enviarte mensajes"
+                            ).forEachIndexed { i, (key, label) ->
+                                if (i > 0) HorizontalDivider(Modifier.padding(horizontal = 16.dp))
+                                Row(
+                                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    RadioButton(
+                                        selected = chatPrivacy == key,
+                                        onClick  = {
+                                            chatPrivacy = key
+                                            scope.launch {
+                                                try { NewsickRetrofit.api.updateChatPrivacy(ChatPrivacyUpdateRequest(key)) }
+                                                catch (_: Exception) {}
+                                            }
+                                        }
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(label)
+                                }
+                            }
+                        }
+                    }
+                }
 
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column {
-                    listOf(
-                        "everyone" to "Todos pueden enviarte mensajes",
-                        "friends"  to "Solo amigos",
-                        "nobody"   to "Nadie puede enviarte mensajes"
-                    ).forEachIndexed { i, (key, label) ->
-                        if (i > 0) HorizontalDivider(Modifier.padding(horizontal = 16.dp))
+                // ── Pestaña 2: IA ──────────────────────────
+                2 -> {
+                    Text("Inteligencia Artificial",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.height(16.dp))
+                    Text("Asistente de chat", style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(8.dp))
+                    Card(modifier = Modifier.fillMaxWidth()) {
                         Row(
-                            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            RadioButton(
-                                selected = chatPrivacy == key,
-                                onClick  = {
-                                    chatPrivacy = key
-                                    scope.launch {
-                                        try { NewsickRetrofit.api.updateChatPrivacy(ChatPrivacyUpdateRequest(key)) }
-                                        catch (_: Exception) {}
-                                    }
+                            Icon(Icons.Default.SmartToy, null,
+                                modifier = Modifier.size(28.dp),
+                                tint = MaterialTheme.colorScheme.primary)
+                            Spacer(Modifier.width(14.dp))
+                            Column(Modifier.weight(1f)) {
+                                val aiConfig = loadAiConfig(context)
+                                if (aiConfig != null) {
+                                    Text(aiConfig.provider.replaceFirstChar { it.uppercase() },
+                                        style = MaterialTheme.typography.titleSmall)
+                                    Text(aiConfig.model,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                } else {
+                                    Text("Sin configurar",
+                                        style = MaterialTheme.typography.titleSmall)
+                                    Text("Pulsa Editar para añadir tu API Key",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Text(label)
+                            }
+                            Button(onClick = { showAiConfig = true }) { Text("Editar") }
                         }
                     }
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "La IA se usa para responder mensajes automáticamente en los chats. Necesitas una API Key del proveedor que elijas.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                // ── Pestaña 3: Cuenta ──────────────────────
+                3 -> {
+                    Text("Cuenta",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.height(16.dp))
+                    Text("Usuario", style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(8.dp))
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.AccountCircle, null,
+                                modifier = Modifier.size(28.dp),
+                                tint = MaterialTheme.colorScheme.primary)
+                            Spacer(Modifier.width(14.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(viewModel.loggedUsername.value,
+                                    style = MaterialTheme.typography.titleSmall)
+                                Text(viewModel.loggedEmail.value,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(24.dp))
+                    Text("Soporte", style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(8.dp))
+                    Button(
+                        onClick = {
+                            val i = Intent(Intent.ACTION_SENDTO).apply {
+                                data = Uri.parse("mailto:")
+                                putExtra(Intent.EXTRA_EMAIL, arrayOf("marcosqh17@gmail.com"))
+                                putExtra(Intent.EXTRA_SUBJECT, "Feedback Newsick")
+                            }
+                            try { context.startActivity(i) }
+                            catch (_: ActivityNotFoundException) {
+                                Toast.makeText(context, "No se encontró app de correo", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.Email, null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Enviar Feedback")
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedButton(
+                        onClick = onLogout,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.ExitToApp, null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Cerrar Sesión")
+                    }
+                    Spacer(Modifier.height(32.dp))
+                    Text("v$version",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.align(Alignment.CenterHorizontally))
                 }
             }
-
-            Spacer(Modifier.height(24.dp))
-
-            Button(onClick = {
-                val i = Intent(Intent.ACTION_SENDTO).apply {
-                    data = Uri.parse("mailto:"); putExtra(Intent.EXTRA_EMAIL, arrayOf("marcosqh17@gmail.com"))
-                    putExtra(Intent.EXTRA_SUBJECT, "Feedback Newsick")
-                }
-                try { context.startActivity(i) }
-                catch (_: ActivityNotFoundException) { Toast.makeText(context, "No se encontró app de correo", Toast.LENGTH_SHORT).show() }
-            }, Modifier.fillMaxWidth()) { Icon(Icons.Default.Email, null); Spacer(Modifier.width(8.dp)); Text("Enviar Feedback") }
-
-            Spacer(Modifier.height(12.dp))
-            OutlinedButton(onClick = onLogout, Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)) {
-                Icon(Icons.AutoMirrored.Filled.ExitToApp, null); Spacer(Modifier.width(8.dp)); Text("Cerrar Sesión")
-            }
-
-            Spacer(Modifier.weight(1f))
-            Text("v$version", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 16.dp))
         }
     }
 }

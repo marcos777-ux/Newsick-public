@@ -41,7 +41,7 @@ fun UserProfileScreen(
     viewModel: MainViewModel,
     onBack: () -> Unit,
     onSongClick: (String) -> Unit,
-    onChatClick: (Int, String, String) -> Unit = { _, _, _ -> }
+    onChatClick: (Int, String, String, Int) -> Unit = { _, _, _, _ -> }
 ) {
     var user                by remember { mutableStateOf<UserResponse?>(null) }
     var posts               by remember { mutableStateOf<List<PostResponse>>(emptyList()) }
@@ -211,7 +211,7 @@ fun UserProfileScreen(
                                     if (r.isSuccessful) {
                                         val convId = r.body()?.conversationId ?: -1
                                         if (convId > 0 && currentUser != null) {
-                                            onChatClick(convId, currentUser!!.username, currentUser!!.profilePhoto ?: "")
+                                            onChatClick(convId, currentUser!!.username, currentUser!!.profilePhoto ?: "", userId)
                                         }
                                     }
                                 } catch (_: Exception) {}

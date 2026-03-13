@@ -69,16 +69,20 @@ fun ProfileScreen(
     onSettingsClick: () -> Unit,
     onSongClick: (String) -> Unit,
     onFriendsClick: () -> Unit,
+    onUserClick: (Int) -> Unit = {},
     onUploadClick: () -> Unit = {}
 ) {
-    var showEditDialog  by remember { mutableStateOf(false) }
-    val mySongs         by viewModel.mySongs.collectAsState()
-    val friendCount     by viewModel.friendCount
-    var selectedTab     by remember { mutableIntStateOf(0) }
-    var recommendations by remember { mutableStateOf<List<RecommendationResponse>>(emptyList()) }
-    var isRefreshing    by remember { mutableStateOf(false) }
-    var selectedRec     by remember { mutableStateOf<RecommendationResponse?>(null) }
-    val scope           = rememberCoroutineScope()
+    var showEditDialog   by remember { mutableStateOf(false) }
+    var showFriendsSheet by remember { mutableStateOf(false) }
+    val mySongs          by viewModel.mySongs.collectAsState()
+    val friendCount      by viewModel.friendCount
+    val friendsList      by viewModel.friendsList
+    var selectedTab      by remember { mutableIntStateOf(0) }
+    var recommendations  by remember { mutableStateOf<List<RecommendationResponse>>(emptyList()) }
+    var isRefreshing     by remember { mutableStateOf(false) }
+    var selectedRec      by remember { mutableStateOf<RecommendationResponse?>(null) }
+    var friendToRemove   by remember { mutableStateOf<FriendshipResponse?>(null) }
+    val scope            = rememberCoroutineScope()
 
     val username     = viewModel.loggedUsername.value
     val bio          = viewModel.loggedBio.value
@@ -88,6 +92,7 @@ fun ProfileScreen(
         scope.launch {
             isRefreshing = true
             viewModel.loadFriendCount()
+            viewModel.loadFriendsList()
             try {
                 val r = NewsickRetrofit.api.getMyRecommendations()
                 if (r.isSuccessful) recommendations = r.body() ?: emptyList()
@@ -98,7 +103,95 @@ fun ProfileScreen(
 
     LaunchedEffect(Unit) { refresh() }
 
-    // ── BottomSheet de detalle de recomendación ────────────
+    // ── Diálogo confirmar cancelar amistad ─────────────────
+    friendToRemove?.let { friend ->
+        AlertDialog(
+            onDismissRequest = { friendToRemove = null },
+            title = { Text("Cancelar amistad") },
+            text  = { Text("¿Seguro que quieres eliminar a ${friend.friendUsername} de tus amigos?") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.removeFriend(friend.friendId)
+                        friendToRemove = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) { Text("Eliminar") }
+            },
+            dismissButton = { TextButton(onClick = { friendToRemove = null }) { Text("Cancelar") } }
+        )
+    }
+
+    // ── BottomSheet lista de amigos ────────────────────────
+    if (showFriendsSheet) {
+        ModalBottomSheet(onDismissRequest = { showFriendsSheet = false }) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    "$friendCount amigo${if (friendCount != 1) "s" else ""}",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
+                )
+                HorizontalDivider()
+                if (friendsList.isEmpty()) {
+                    Box(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(Icons.Default.PeopleAlt, null,
+                                modifier = Modifier.size(48.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.height(8.dp))
+                            Text("Aún no tienes amigos",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                } else {
+                    LazyColumn(
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        items(friendsList, key = { it.friendId }) { friend ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        showFriendsSheet = false
+                                        onUserClick(friend.friendId)
+                                    }
+                                    .padding(vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                val photoUrl = NewsickRetrofit.absoluteUrl(friend.friendProfilePhoto)
+                                if (photoUrl.isNotBlank()) {
+                                    AsyncImage(
+                                        model = photoUrl, contentDescription = null,
+                                        modifier = Modifier.size(48.dp).clip(CircleShape),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                } else {
+                                    Icon(Icons.Default.AccountCircle, null,
+                                        modifier = Modifier.size(48.dp),
+                                        tint = MaterialTheme.colorScheme.primary)
+                                }
+                                Spacer(Modifier.width(12.dp))
+                                Text(
+                                    friend.friendUsername,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                IconButton(onClick = { friendToRemove = friend }) {
+                                    Icon(Icons.Default.PersonRemove, "Cancelar amistad",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
+                        item { Spacer(Modifier.height(16.dp)) }
+                    }
+                }
+            }
+        }
+    }
     selectedRec?.let { rec ->
         RecommendationDetailSheet(
             rec       = rec,
@@ -180,7 +273,7 @@ fun ProfileScreen(
 
                 item {
                     AssistChip(
-                        onClick = onFriendsClick,
+                        onClick = { showFriendsSheet = true },
                         label = { Text("$friendCount amigo${if (friendCount != 1) "s" else ""}") },
                         leadingIcon = { Icon(Icons.Default.Group, null, modifier = Modifier.size(16.dp)) }
                     )

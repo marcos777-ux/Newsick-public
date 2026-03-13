@@ -31,7 +31,7 @@ fun FriendsPagerScreen(
     onBack: () -> Unit,
     onUserClick: (Int) -> Unit,
     onSongClick: (String) -> Unit,
-    onChatClick: (Int, String, String) -> Unit,  // conversationId, username, photo
+    onChatClick: (Int, String, String, Int) -> Unit,  // conversationId, username, photo, otherUserId
     initialTab: Int = 0
 ) {
     var selectedTab by remember { mutableIntStateOf(initialTab) }
@@ -85,7 +85,7 @@ fun FriendsPagerScreen(
 @Composable
 private fun MessagesTab(
     viewModel: MainViewModel,
-    onChatClick: (Int, String, String) -> Unit
+    onChatClick: (Int, String, String, Int) -> Unit
 ) {
     val scope = rememberCoroutineScope()
     var conversations by remember { mutableStateOf<List<ConversationResponse>>(emptyList()) }
@@ -126,7 +126,7 @@ private fun MessagesTab(
             ConversationItem(
                 conv   = conv,
                 onClick = {
-                    onChatClick(conv.id, conv.otherUsername, conv.otherProfilePhoto)
+                    onChatClick(conv.id, conv.otherUsername, conv.otherProfilePhoto, conv.otherUserId)
                 },
                 onDelete = {
                     scope.launch {
