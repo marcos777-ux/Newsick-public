@@ -64,17 +64,26 @@ fun UserProfileScreen(
     LaunchedEffect(userId) {
         isLoading = true
         user = viewModel.getUserById(userId)
-        try {
-            val r = NewsickRetrofit.api.getUserPosts(userId)
-            if (r.isSuccessful) posts = r.body() ?: emptyList()
-        } catch (_: Exception) {}
+        if (isSelf) {
+            try {
+                val r = NewsickRetrofit.api.getUserPosts(userId)
+                if (r.isSuccessful) posts = r.body() ?: emptyList()
+            } catch (_: Exception) {}
+        }
         if (!isSelf) {
             commonSongs  = viewModel.getCommonSongs(userId)
             friendStatus = viewModel.getFriendStatus(userId)
-            try {
-                val r = NewsickRetrofit.api.getUserRecommendations(userId)
-                if (r.isSuccessful) recommendations = r.body() ?: emptyList()
-            } catch (_: Exception) {}
+            // Solo cargar contenido privado si son amigos
+            if (friendStatus == "friends") {
+                try {
+                    val r = NewsickRetrofit.api.getUserPosts(userId)
+                    if (r.isSuccessful) posts = r.body() ?: emptyList()
+                } catch (_: Exception) {}
+                try {
+                    val r = NewsickRetrofit.api.getUserRecommendations(userId)
+                    if (r.isSuccessful) recommendations = r.body() ?: emptyList()
+                } catch (_: Exception) {}
+            }
             try {
                 val r = NewsickRetrofit.api.getChatPrivacy(userId)
                 if (r.isSuccessful) chatPrivacy = r.body()?.chatPrivacy ?: "everyone"
@@ -185,11 +194,14 @@ fun UserProfileScreen(
                     modifier = Modifier.fillMaxWidth()) {
                     Box(modifier = Modifier.weight(1f)) {
                         FriendActionButton(
-                            status         = effectiveStatus,
-                            onAddFriend    = {
+                            status          = effectiveStatus,
+                            onAddFriend     = {
                                 viewModel.sendFriendRequest(userId) { success -> if (success) requestSent = true }
                             },
-                            onRemoveFriend = { showRemoveConfirm = true }
+                            onCancelRequest = {
+                                viewModel.cancelFriendRequest(userId) { success -> if (success) requestSent = false }
+                            },
+                            onRemoveFriend  = { showRemoveConfirm = true }
                         )
                     }
                     if (effectiveStatus == "friends") {
@@ -235,8 +247,14 @@ fun UserProfileScreen(
 
             HorizontalDivider()
 
-            // ── Pestañas ───────────────────────────────────
-            if (!isSelf) {
+            // ── Pestañas: solo visibles si somos amigos o es el propio perfil ──
+            val isFriend = friendStatus == "friends"
+
+            if (isSelf) {
+                Spacer(Modifier.height(12.dp))
+                Text("Publicaciones (${posts.size})", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(8.dp))
+            } else if (isFriend) {
                 TabRow(selectedTabIndex = selectedTab) {
                     Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 },
                         text = { Text("Publicaciones") },
@@ -252,53 +270,64 @@ fun UserProfileScreen(
                         icon = { Icon(Icons.Default.Recommend, null, Modifier.size(18.dp)) })
                 }
                 Spacer(Modifier.height(8.dp))
-            } else {
-                Spacer(Modifier.height(12.dp))
-                Text("Publicaciones (${posts.size})", style = MaterialTheme.typography.titleMedium)
-                Spacer(Modifier.height(8.dp))
+            } else if (friendStatus != "loading") {
+                // No amigos: mostrar mensaje informativo
+                Box(Modifier.weight(1f).fillMaxWidth(), Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(Icons.Default.Lock, null,
+                            modifier = Modifier.size(48.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.height(12.dp))
+                        Text("Hazte amigo/a para ver sus publicaciones",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
             }
 
-            when (if (isSelf) 0 else selectedTab) {
-                0 -> {
-                    if (posts.isEmpty()) {
-                        Box(Modifier.weight(1f).fillMaxWidth(), Alignment.Center) {
-                            Text("Este usuario aún no ha publicado nada",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    } else {
-                        LazyVerticalGrid(
-                            columns = GridCells.Fixed(2),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            items(posts) { post ->
-                                UserPostCard(post = post, onClick = { onSongClick(post.trackId) })
-                            }
-                        }
-                    }
-                }
-                1 -> {
-                    if (recommendations.isEmpty()) {
-                        Box(Modifier.weight(1f).fillMaxWidth(), Alignment.Center) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Icon(Icons.Default.Recommend, null, modifier = Modifier.size(48.dp),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Spacer(Modifier.height(8.dp))
-                                Text("Ninguno de tus amigos le ha recomendado canciones",
+            if (isSelf || isFriend) {
+                when (if (isSelf) 0 else selectedTab) {
+                    0 -> {
+                        if (posts.isEmpty()) {
+                            Box(Modifier.weight(1f).fillMaxWidth(), Alignment.Center) {
+                                Text("Este usuario aún no ha publicado nada",
                                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
+                        } else {
+                            LazyVerticalGrid(
+                                columns = GridCells.Fixed(2),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                items(posts) { post ->
+                                    UserPostCard(post = post, onClick = { onSongClick(post.trackId) })
+                                }
+                            }
                         }
-                    } else {
-                        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.weight(1f)) {
-                            items(recommendations) { rec ->
-                                RecommendationCardReadOnly(rec = rec)
+                    }
+                    1 -> {
+                        if (recommendations.isEmpty()) {
+                            Box(Modifier.weight(1f).fillMaxWidth(), Alignment.Center) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Icon(Icons.Default.Recommend, null, modifier = Modifier.size(48.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Spacer(Modifier.height(8.dp))
+                                    Text("Ninguno de tus amigos le ha recomendado canciones",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        } else {
+                            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.weight(1f)) {
+                                items(recommendations) { rec ->
+                                    RecommendationCardReadOnly(rec = rec)
+                                }
                             }
                         }
                     }
                 }
-            }
+            } // end isSelf || isFriend
         }
     }
 }
@@ -482,7 +511,12 @@ private fun RecommendSongDialog(
 // ── Botón dinámico de amistad ─────────────────────────────
 
 @Composable
-private fun FriendActionButton(status: String, onAddFriend: () -> Unit, onRemoveFriend: () -> Unit) {
+private fun FriendActionButton(
+    status: String,
+    onAddFriend: () -> Unit,
+    onCancelRequest: () -> Unit,
+    onRemoveFriend: () -> Unit
+) {
     when (status) {
         "friends" -> Button(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth(),
             colors = ButtonDefaults.buttonColors(
@@ -491,9 +525,9 @@ private fun FriendActionButton(status: String, onAddFriend: () -> Unit, onRemove
             Icon(Icons.Default.CheckCircle, null, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp)); Text("Ya sois amigos")
         }
-        "pending_sent" -> OutlinedButton(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth()) {
+        "pending_sent" -> OutlinedButton(onClick = onCancelRequest, modifier = Modifier.fillMaxWidth()) {
             Icon(Icons.Default.HourglassEmpty, null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(8.dp)); Text("Solicitud enviada")
+            Spacer(Modifier.width(8.dp)); Text("Solicitud enviada · Cancelar")
         }
         "loading" -> OutlinedButton(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth()) {
             CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)

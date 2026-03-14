@@ -8,8 +8,9 @@ import android.media.MediaPlayer
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
@@ -82,7 +83,11 @@ fun SongDetailScreen(
             try {
                 MediaPlayer().apply {
                     setDataSource(url)
-                    setOnPreparedListener { playerReady = true }
+                    setOnPreparedListener {
+                        playerReady = true
+                        // Autoplay al entrar al álbum
+                        start(); isPlaying = true
+                    }
                     setOnCompletionListener { isPlaying = false }
                     setOnErrorListener { _, _, _ -> playerError = true; false }
                     prepareAsync()
@@ -147,98 +152,96 @@ fun SongDetailScreen(
             return@Scaffold
         }
 
-        LazyColumn(
-            modifier       = Modifier.fillMaxSize().padding(pad),
-            contentPadding = PaddingValues(bottom = 16.dp)
-        ) {
-
+        Column(Modifier.fillMaxSize().padding(pad)) {
             // Cabecera: portada + info + play
-            item {
-                song?.let { s ->
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.primaryContainer)
-                    ) {
-                        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Box(Modifier.size(80.dp)) {
-                                AsyncImage(
-                                    s.artworkUrl, null,
-                                    Modifier.fillMaxSize().clip(RoundedCornerShape(12.dp)),
-                                    contentScale = ContentScale.Crop
-                                )
-                                if (previewUrl != null && !playerError) {
-                                    Surface(
-                                        modifier       = Modifier.align(Alignment.Center).size(34.dp),
-                                        shape          = CircleShape,
-                                        color          = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
-                                        tonalElevation = 4.dp
-                                    ) {
-                                        Box(Modifier.fillMaxSize(), Alignment.Center) {
-                                            if (!playerReady) {
-                                                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                                            } else {
-                                                IconButton(
-                                                    onClick = {
-                                                        val mp = mediaPlayer ?: return@IconButton
-                                                        if (isPlaying) { mp.pause(); isPlaying = false }
-                                                        else { mp.start(); isPlaying = true }
-                                                    },
-                                                    modifier = Modifier.fillMaxSize()
-                                                ) {
-                                                    Icon(
-                                                        if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                                        null,
-                                                        tint = MaterialTheme.colorScheme.primary
-                                                    )
-                                                }
+            song?.let { s ->
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer)
+                ) {
+                    Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(80.dp)) {
+                            AsyncImage(
+                                s.artworkUrl, null,
+                                Modifier.fillMaxSize().clip(RoundedCornerShape(12.dp)),
+                                contentScale = ContentScale.Crop
+                            )
+                            if (previewUrl != null && !playerError) {
+                                Surface(
+                                    modifier       = Modifier.align(Alignment.Center).size(34.dp),
+                                    shape          = CircleShape,
+                                    color          = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
+                                    tonalElevation = 4.dp
+                                ) {
+                                    Box(Modifier.fillMaxSize(), Alignment.Center) {
+                                        if (!playerReady) {
+                                            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                                        } else {
+                                            IconButton(
+                                                onClick = {
+                                                    val mp = mediaPlayer ?: return@IconButton
+                                                    if (isPlaying) { mp.pause(); isPlaying = false }
+                                                    else { mp.start(); isPlaying = true }
+                                                },
+                                                modifier = Modifier.fillMaxSize()
+                                            ) {
+                                                Icon(
+                                                    if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                                    null,
+                                                    tint = MaterialTheme.colorScheme.primary
+                                                )
                                             }
                                         }
                                     }
                                 }
                             }
-                            Spacer(Modifier.width(14.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text(s.trackName, style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Bold)
-                                Text(s.artistName, style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Spacer(Modifier.height(4.dp))
-                                Text(
-                                    "${photos.size} foto(s) · ${photos.map { it.username }.distinct().size} persona(s)",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
+                        }
+                        Spacer(Modifier.width(14.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(s.trackName, style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold)
+                            Text(s.artistName, style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "${photos.size} foto(s) · ${photos.map { it.username }.distinct().size} persona(s)",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     }
                 }
             }
 
-            // Fotos en lista vertical, más recientes primero
+            // Fotos en grid de 2 columnas
             if (photos.isEmpty()) {
-                item {
-                    Box(Modifier.fillMaxWidth().padding(top = 48.dp), Alignment.Center) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(Icons.Default.PhotoLibrary, null,
-                                Modifier.size(56.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Spacer(Modifier.height(8.dp))
-                            Text("Aún no hay fotos",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
+                Box(Modifier.fillMaxWidth().padding(top = 48.dp), Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(Icons.Default.PhotoLibrary, null,
+                            Modifier.size(56.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.height(8.dp))
+                        Text("Aún no hay fotos", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             } else {
-                itemsIndexed(photos, key = { _, p -> p.id }) { index, photo ->
-                    PhotoListItem(
-                        photo    = photo,
-                        isOwn    = photo.userId == myId,
-                        onDelete = { photoToDelete = photo },
-                        onClick  = { fullscreenIndex = index }
-                    )
-                    Spacer(Modifier.height(2.dp))
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(2),
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(4.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    itemsIndexed(photos, key = { _, p -> p.id }) { index, photo ->
+                        PhotoListItem(
+                            photo    = photo,
+                            isOwn    = photo.userId == myId,
+                            onDelete = { photoToDelete = photo },
+                            onClick  = { fullscreenIndex = index }
+                        )
+                    }
                 }
             }
         }

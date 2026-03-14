@@ -128,7 +128,7 @@ data class LatestVersionResponse(
     val latestVersionName: String,
     val downloadUrl: String,
     val minVersionCode: Int = 1,
-    val channelUrl: String = "https://whatsapp.com/channel/0029VbC0ILX4yltWHUDKu22h"
+    val channelUrl: String = "https://t.me/+SroxvffsnMU2MjE8"
 )
 
 // Stickers
@@ -268,6 +268,9 @@ interface NewsickApiService {
 
     @POST("api/friend-requests/send")
     suspend fun sendFriendRequest(@Body r: FriendRequestDto): retrofit2.Response<Unit>
+
+    @DELETE("api/friend-requests/cancel/{targetUserId}")
+    suspend fun cancelFriendRequest(@Path("targetUserId") targetUserId: Int): retrofit2.Response<Unit>
 
     @GET("api/friend-requests/pending")
     suspend fun getPendingRequests(): retrofit2.Response<List<FriendRequestResponse>>

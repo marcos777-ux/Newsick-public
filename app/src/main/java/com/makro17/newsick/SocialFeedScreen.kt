@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
@@ -49,6 +50,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -56,6 +58,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -66,8 +69,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import android.media.MediaPlayer
 import coil.compose.AsyncImage
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 // ══════════════════════════════════════════════════════════
 // UTILIDAD: tiempo relativo
@@ -105,6 +111,37 @@ fun SocialFeedScreen(
     val context       = LocalContext.current
     val scope         = rememberCoroutineScope()
     var isRefreshing  by remember { mutableStateOf(false) }
+    val listState     = rememberLazyListState()
+
+    // ── Auto-play: reproducir la canción del item visible ─
+    var currentPreviewPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
+
+    DisposableEffect(Unit) {
+        onDispose { currentPreviewPlayer?.stop(); currentPreviewPlayer?.release(); currentPreviewPlayer = null }
+    }
+
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.firstVisibleItemIndex }
+            .collect { visibleIndex ->
+                val group = feedGroups.getOrNull(visibleIndex) ?: return@collect
+                val trackId = group.trackId
+                // Sólo buscar preview si es una nueva canción
+                scope.launch(Dispatchers.IO) {
+                    try {
+                        val numId = trackId.toLongOrNull() ?: return@launch
+                        val res   = ItunesRetrofit.api.lookupTrack(numId)
+                        val url   = res.results.firstOrNull()?.previewUrl ?: return@launch
+                        currentPreviewPlayer?.stop(); currentPreviewPlayer?.release()
+                        val mp = MediaPlayer()
+                        mp.setDataSource(url)
+                        mp.setOnPreparedListener { it.start() }
+                        mp.setOnCompletionListener {}
+                        mp.prepareAsync()
+                        currentPreviewPlayer = mp
+                    } catch (_: Exception) {}
+                }
+            }
+    }
 
     // Estado para foto a pantalla completa
     var fullscreenGroup       by remember { mutableStateOf<FeedGroup?>(null) }
@@ -128,8 +165,7 @@ fun SocialFeedScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(viewModel.loggedUsername.value,
-                    style = MaterialTheme.typography.headlineMedium,
+                Text("Newsick", style = MaterialTheme.typography.headlineMedium,
                     color = MaterialTheme.colorScheme.primary)
                 BadgedBox(badge = {
                     if (unreadCount > 0) Badge { Text(if (unreadCount > 9) "9+" else unreadCount.toString()) }
@@ -189,7 +225,7 @@ fun SocialFeedScreen(
                         }
                     }
                 }
-            // ── Feed con pull-to-refresh ───────────────────
+                // ── Feed con pull-to-refresh ───────────────────
             } else {
                 PullToRefreshBox(
                     isRefreshing = isRefreshing,
@@ -217,6 +253,7 @@ fun SocialFeedScreen(
                         }
                     } else {
                         LazyColumn(
+                            state          = listState,
                             contentPadding = PaddingValues(bottom = 88.dp),
                             verticalArrangement = Arrangement.spacedBy(1.dp)
                         ) {

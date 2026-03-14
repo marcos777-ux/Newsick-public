@@ -611,6 +611,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun cancelFriendRequest(targetUserId: Int, onResult: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val r = api.cancelFriendRequest(targetUserId)
+                onResult(r.isSuccessful)
+            } catch (_: Exception) { onResult(false) }
+        }
+    }
+
     fun respondToFriendRequest(requestId: Int, accept: Boolean) {
         viewModelScope.launch {
             try { api.respondToFriendRequest(RespondFriendRequest(requestId, accept)); loadNotificationsData(); loadFriendCount() }
@@ -1593,7 +1602,7 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit, onLogout: () ->
         try { context.packageManager.getPackageInfo(context.packageName, 0).versionCode } catch (_: Exception) { 0 }
     }
     var updateStatus by remember { mutableStateOf<String?>(null) } // null=comprobando, "ok", "available:X.X", "required"
-    var channelUrl   by remember { mutableStateOf("https://whatsapp.com/channel/0029VbC0ILX4yltWHUDKu22h") }
+    var channelUrl   by remember { mutableStateOf("https://t.me/+SroxvffsnMU2MjE8") }
 
     LaunchedEffect(Unit) {
         try {
