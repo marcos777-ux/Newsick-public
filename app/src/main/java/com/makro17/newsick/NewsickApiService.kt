@@ -126,7 +126,9 @@ data class NearbyUserResponse(
 data class LatestVersionResponse(
     val latestVersionCode: Int,
     val latestVersionName: String,
-    val downloadUrl: String
+    val downloadUrl: String,
+    val minVersionCode: Int = 1,
+    val channelUrl: String = "https://whatsapp.com/channel/0029VbC0ILX4yltWHUDKu22h"
 )
 
 // Stickers

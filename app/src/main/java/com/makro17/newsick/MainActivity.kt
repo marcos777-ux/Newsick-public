@@ -131,6 +131,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var savedSession: SavedSession? = null
     val canCancelAddAccount get() = savedSession != null
 
+    // Ruta a la que volver si el usuario cancela "añadir cuenta"
+    var pendingReturnRoute = mutableStateOf<String?>(null)
+
     var userSearchQuery    = mutableStateOf("")
     var searchResults      = mutableStateOf<List<UserResponse>>(emptyList())
     var isSearching        = mutableStateOf(false)
@@ -256,8 +259,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // ── AÑADIR CUENTA ─────────────────────────────────────
 
     /** Guarda la sesión actual y va al login sin borrar el dark mode ni los datos. */
-    fun startAddAccount() {
-        // Capturar el valor actual del dark mode ANTES del logout para restaurarlo si es necesario
+    fun startAddAccount(returnRoute: String = "settings") {
         val currentDark = darkModeOverride.value
         savedSession = SavedSession(
             userId       = loggedUserId.value,
@@ -267,8 +269,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             profilePhoto = loggedProfilePhoto.value,
             token        = AuthManager.token
         )
+        pendingReturnRoute.value = returnRoute
         logout()
-        // logout() no toca darkModeOverride, pero lo reasignamos por si acaso
         darkModeOverride.value = currentDark
     }
 
@@ -846,9 +848,16 @@ class MainActivity : ComponentActivity() {
         setContent {
             val systemDark   = isSystemInDarkTheme()
             val darkOverride by viewModel.darkModeOverride
-            val isDark       = darkOverride ?: systemDark
-            var updateUrl       by remember { mutableStateOf<String?>(null) }
-            var latestVersion   by remember { mutableStateOf<String?>(null) }
+            // Leer síncronamente de SharedPreferences como fallback garantizado:
+            // evita cualquier race condition si el ViewModel todavía no actualizó su estado
+            val savedDarkMode = remember {
+                when (getSharedPreferences("newsick_settings", Context.MODE_PRIVATE)
+                    .getInt("dark_mode", -1)) { 0 -> false; 1 -> true; else -> null }
+            }
+            val isDark = darkOverride ?: savedDarkMode ?: systemDark
+            var updateUrl         by remember { mutableStateOf<String?>(null) }
+            var latestVersionName by remember { mutableStateOf<String?>(null) }
+            var isIncompatible    by remember { mutableStateOf(false) }
             val context = LocalContext.current
 
             // Deep link desde notificación de chat
@@ -870,34 +879,72 @@ class MainActivity : ComponentActivity() {
                     val res = NewsickRetrofit.api.getLatestVersion()
                     if (res.isSuccessful) {
                         val body = res.body() ?: return@LaunchedEffect
-                        val myVersion = context.packageManager
-                            .getPackageInfo(context.packageName, 0).versionCode
-                        if (body.latestVersionCode > myVersion) {
-                            latestVersion = body.latestVersionName
-                            updateUrl     = body.downloadUrl
+                        val myVersionCode = try {
+                            context.packageManager.getPackageInfo(context.packageName, 0).versionCode
+                        } catch (_: Exception) { 0 }
+                        // Versión incompatible: bloquear uso
+                        if (myVersionCode < body.minVersionCode) {
+                            isIncompatible    = true
+                            latestVersionName = body.latestVersionName
+                            updateUrl         = body.channelUrl
+                            return@LaunchedEffect
+                        }
+                        // Versión desactualizada: mostrar aviso UNA SOLA VEZ por versión
+                        if (myVersionCode < body.latestVersionCode) {
+                            val shownKey     = "update_shown_${body.latestVersionCode}"
+                            val alreadyShown = getSharedPreferences("newsick_settings", Context.MODE_PRIVATE)
+                                .getBoolean(shownKey, false)
+                            if (!alreadyShown) {
+                                latestVersionName = body.latestVersionName
+                                updateUrl         = body.channelUrl
+                                getSharedPreferences("newsick_settings", Context.MODE_PRIVATE)
+                                    .edit().putBoolean(shownKey, true).apply()
+                            }
                         }
                     }
                 } catch (_: Exception) {}
             }
 
-            // Diálogo de actualización disponible
-            updateUrl?.let { url ->
+            // Diálogo de versión incompatible (bloquea el uso, no se puede cerrar)
+            if (isIncompatible) {
                 AlertDialog(
-                    onDismissRequest = { updateUrl = null },
-                    title   = { Text("Nueva versión disponible") },
-                    text    = { Text("Hay una nueva versión de Newsick disponible: ${latestVersion ?: ""}. ¿Quieres descargarla ahora?") },
+                    onDismissRequest = {},
+                    title = { Text("Actualización obligatoria") },
+                    text  = { Text("Esta versión de Newsick ya no es compatible. Descarga la versión ${latestVersionName ?: "más reciente"} desde el canal oficial para seguir usando la app.") },
                     confirmButton = {
                         Button(onClick = {
-                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(updateUrl)))
+                        }) {
+                            Icon(Icons.Default.Download, null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Ir al canal de actualizaciones")
+                        }
+                    },
+                    dismissButton = {}
+                )
+            }
+
+            // Diálogo de actualización disponible (informativo, se muestra una sola vez)
+            if (!isIncompatible && updateUrl != null) {
+                AlertDialog(
+                    onDismissRequest = { updateUrl = null },
+                    title = { Text("Nueva versión disponible") },
+                    text  = { Text("Hay una nueva versión de Newsick disponible (${latestVersionName ?: ""}). Descárgala desde el canal oficial de WhatsApp.") },
+                    confirmButton = {
+                        Button(onClick = {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(updateUrl)))
                             updateUrl = null
-                        }) { Text("Descargar") }
+                        }) {
+                            Icon(Icons.Default.Download, null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Ir al canal")
+                        }
                     },
                     dismissButton = {
                         TextButton(onClick = { updateUrl = null }) { Text("Ahora no") }
                     }
                 )
             }
-
 
             MaterialTheme(colorScheme = if (isDark) darkColorScheme() else lightColorScheme()) {
                 val windowSize = calculateWindowSizeClass(this)
@@ -935,6 +982,14 @@ fun NewsickApp(
         viewModel.loadNotificationsData(context)
         viewModel.loadFriendCount()
         viewModel.loadFeedPhotos()
+    }
+
+    // Si el usuario volvió atrás tras "añadir cuenta", navegar al sitio de donde vino
+    val returnRoute by viewModel.pendingReturnRoute
+    LaunchedEffect(returnRoute) {
+        val route = returnRoute ?: return@LaunchedEffect
+        viewModel.pendingReturnRoute.value = null
+        navController.navigate(route) { launchSingleTop = true }
     }
 
     // Navegar al chat si se abrió desde una notificación
@@ -1534,6 +1589,26 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit, onLogout: () ->
     val version = remember {
         try { context.packageManager.getPackageInfo(context.packageName, 0).versionName } catch (_: Exception) { "?" }
     }
+    val versionCode = remember {
+        try { context.packageManager.getPackageInfo(context.packageName, 0).versionCode } catch (_: Exception) { 0 }
+    }
+    var updateStatus by remember { mutableStateOf<String?>(null) } // null=comprobando, "ok", "available:X.X", "required"
+    var channelUrl   by remember { mutableStateOf("https://whatsapp.com/channel/0029VbC0ILX4yltWHUDKu22h") }
+
+    LaunchedEffect(Unit) {
+        try {
+            val r = NewsickRetrofit.api.getLatestVersion()
+            if (r.isSuccessful) {
+                val body = r.body()!!
+                channelUrl = body.channelUrl
+                updateStatus = when {
+                    versionCode < body.minVersionCode    -> "required"
+                    versionCode < body.latestVersionCode -> "available:${body.latestVersionName}"
+                    else                                 -> "ok"
+                }
+            }
+        } catch (_: Exception) { updateStatus = "?" }
+    }
 
     if (showAiConfig) {
         AiConfigDialog(context = context, onDismiss = { showAiConfig = false })
@@ -1965,6 +2040,36 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit, onLogout: () ->
                     Text("Soporte", style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.height(8.dp))
+
+                    // Estado de actualización
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            val (statusIcon, statusText, statusColor) = when {
+                                updateStatus == null    -> Triple(Icons.Default.HourglassEmpty,  "Comprobando actualizaciones…", MaterialTheme.colorScheme.onSurfaceVariant)
+                                updateStatus == "ok"    -> Triple(Icons.Default.CheckCircle,     "Newsick está actualizado",     MaterialTheme.colorScheme.primary)
+                                updateStatus == "required" -> Triple(Icons.Default.Error,        "Actualización obligatoria",    MaterialTheme.colorScheme.error)
+                                updateStatus == "?"     -> Triple(Icons.Default.CloudOff,        "No se pudo comprobar",         MaterialTheme.colorScheme.onSurfaceVariant)
+                                else -> Triple(Icons.Default.SystemUpdate, "Actualización disponible: ${updateStatus?.removePrefix("available:")}", MaterialTheme.colorScheme.tertiary)
+                            }
+                            Icon(statusIcon, null, modifier = Modifier.size(24.dp), tint = statusColor)
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(statusText, style = MaterialTheme.typography.bodyMedium, color = statusColor)
+                                Text("v$version (build $versionCode)",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            if (updateStatus != "ok" && updateStatus != null && updateStatus != "?") {
+                                TextButton(onClick = {
+                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(channelUrl)))
+                                }) { Text("Actualizar") }
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(12.dp))
                     Button(
                         onClick = {
                             val i = Intent(Intent.ACTION_SENDTO).apply {
