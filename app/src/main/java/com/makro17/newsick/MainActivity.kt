@@ -180,28 +180,65 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         viewModelScope.launch {
+            // Leer dark mode síncronamente ANTES de cualquier recomposición
+            val settingsPrefsEager = getApplication<Application>()
+                .getSharedPreferences("newsick_settings", Context.MODE_PRIVATE)
+            val legacyPrefsEager = getApplication<Application>()
+                .getSharedPreferences("newsick_prefs", Context.MODE_PRIVATE)
+            if (!settingsPrefsEager.contains("dark_mode") && legacyPrefsEager.contains("dark_mode")) {
+                settingsPrefsEager.edit().putInt("dark_mode", legacyPrefsEager.getInt("dark_mode", -1)).apply()
+            }
+            darkModeOverride.value = when (settingsPrefsEager.getInt("dark_mode", -1)) {
+                0 -> false; 1 -> true; else -> null
+            }
+
             val saved = prefs.getInt("user_id", 0)
             if (saved > 0) {
-                loggedUserId.value       = saved
-                loggedUsername.value     = prefs.getString("username", "") ?: ""
-                loggedBio.value          = prefs.getString("bio", "") ?: ""
-                loggedEmail.value        = prefs.getString("email", "") ?: ""
-                loggedProfilePhoto.value = prefs.getString("profile_photo", "") ?: ""
-                AuthManager.token        = prefs.getString("token", "") ?: ""
-                AuthManager.userId       = saved
-                isLoggedIn.value         = true
-                // Asegurar que la sesión activa está en la lista de sesiones guardadas
-                val ids = getSavedSessionIds().toMutableSet(); ids.add(saved)
-                if (!prefs.contains("session_${saved}_token")) {
-                    prefs.edit().apply {
-                        putString("session_${saved}_token",    AuthManager.token)
-                        putString("session_${saved}_username", loggedUsername.value)
-                        putString("session_${saved}_email",    loggedEmail.value)
-                        putString("session_${saved}_bio",      loggedBio.value)
-                        putString("session_${saved}_photo",    loggedProfilePhoto.value)
-                        putString("session_ids", ids.joinToString(","))
-                        apply()
+                val token    = prefs.getString("token", "") ?: ""
+                val username = prefs.getString("username", "") ?: ""
+                val bio      = prefs.getString("bio", "") ?: ""
+                val email    = prefs.getString("email", "") ?: ""
+                val photo    = prefs.getString("profile_photo", "") ?: ""
+
+                // Configurar AuthManager para poder hacer la llamada de validación
+                AuthManager.token  = token
+                AuthManager.userId = saved
+
+                // Validar que el usuario aún existe en el servidor
+                val valid = try {
+                    val r = api.getUserById(saved)
+                    r.isSuccessful
+                } catch (_: Exception) {
+                    true // Si no hay red, asumir válido para no desloguear offline
+                }
+
+                if (valid) {
+                    loggedUserId.value       = saved
+                    loggedUsername.value     = username
+                    loggedBio.value          = bio
+                    loggedEmail.value        = email
+                    loggedProfilePhoto.value = photo
+                    isLoggedIn.value         = true
+                    // Asegurar que la sesión activa está en la lista de sesiones guardadas
+                    val ids = getSavedSessionIds().toMutableSet(); ids.add(saved)
+                    if (!prefs.contains("session_${saved}_token")) {
+                        prefs.edit().apply {
+                            putString("session_${saved}_token",    token)
+                            putString("session_${saved}_username", username)
+                            putString("session_${saved}_email",    email)
+                            putString("session_${saved}_bio",      bio)
+                            putString("session_${saved}_photo",    photo)
+                            putString("session_ids", ids.joinToString(","))
+                            apply()
+                        }
                     }
+                } else {
+                    // Usuario eliminado del servidor — limpiar sesión
+                    AuthManager.token = ""; AuthManager.userId = 0
+                    val savedThemeVal = settingsPrefsEager.getInt("dark_mode", -1)
+                    prefs.edit().clear().apply()
+                    // Restaurar dark mode tras limpiar
+                    settingsPrefsEager.edit().putInt("dark_mode", savedThemeVal).apply()
                 }
             }
             delay(1000)
@@ -241,7 +278,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         savedSession = null
         saveSession(AuthResponse(
             user  = UserResponse(id = s.userId, email = s.email, username = s.username,
-                                 bio = s.bio, profilePhoto = s.profilePhoto),
+                bio = s.bio, profilePhoto = s.profilePhoto),
             token = s.token
         ))
         authError.value = null
@@ -344,7 +381,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val photo    = prefs.getString("session_${uid}_photo", "") ?: ""
             return AuthResponse(
                 user  = UserResponse(id = uid, email = email, username = username,
-                                     bio = bio, profilePhoto = photo),
+                    bio = bio, profilePhoto = photo),
                 token = token
             )
         }
@@ -419,7 +456,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val photo    = prefs.getString("session_${target.id}_photo", "") ?: ""
             saveSession(AuthResponse(
                 user  = UserResponse(id = target.id, email = email, username = username,
-                                     bio = bio, profilePhoto = photo),
+                    bio = bio, profilePhoto = photo),
                 token = token
             ))
         } else {
@@ -1879,7 +1916,7 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit, onLogout: () ->
                                             if (isActive) Icons.Default.AccountCircle else Icons.Default.SwitchAccount,
                                             null, modifier = Modifier.size(24.dp),
                                             tint = if (isActive) MaterialTheme.colorScheme.primary
-                                                   else MaterialTheme.colorScheme.onSurfaceVariant
+                                            else MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                         Spacer(Modifier.width(12.dp))
                                         Column(Modifier.weight(1f)) {
