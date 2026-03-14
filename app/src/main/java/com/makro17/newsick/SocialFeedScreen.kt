@@ -128,7 +128,8 @@ fun SocialFeedScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Newsick", style = MaterialTheme.typography.headlineMedium,
+                Text(viewModel.loggedUsername.value,
+                    style = MaterialTheme.typography.headlineMedium,
                     color = MaterialTheme.colorScheme.primary)
                 BadgedBox(badge = {
                     if (unreadCount > 0) Badge { Text(if (unreadCount > 9) "9+" else unreadCount.toString()) }

@@ -20,8 +20,12 @@ object AuthManager {
 // MODELOS
 // ══════════════════════════════════════════════════════════
 
-data class LoginRequest(val email: String, val password: String)
+data class LoginRequest(val identifier: String, val password: String)
 data class RegisterRequest(val email: String, val password: String, val username: String)
+data class SendCodeRequest(val email: String, val purpose: String)  // "register" | "reset"
+data class VerifyCodeRequest(val email: String, val code: String, val purpose: String)
+data class ChangePasswordRequest(val email: String, val code: String, val newPassword: String)
+data class SwitchAccountRequest(val targetUserId: Int)
 
 data class UserResponse(
     val id: Int, val email: String, val username: String,
@@ -74,7 +78,8 @@ data class FriendshipResponse(
 )
 data class NotificationResponse(
     val id: Int, val type: String, val title: String,
-    val message: String, val isRead: Boolean, val createdAt: String
+    val message: String, val isRead: Boolean, val createdAt: String,
+    val referenceId: Int? = null   // conversationId para type="message"
 )
 data class FriendStatusResponse(val status: String)
 data class FriendCountResponse(val count: Int)
@@ -124,6 +129,13 @@ data class LatestVersionResponse(
     val downloadUrl: String
 )
 
+// Stickers
+data class CreateStickerRequest(val url: String)
+data class StickerDto(
+    val id: Int, val creatorId: Int, val creatorUsername: String,
+    val creatorPhoto: String, val email: String, val url: String, val createdAt: String
+)
+
 // Chat
 data class ChatPrivacyUpdateRequest(val chatPrivacy: String)
 data class ChatPrivacyResponse(val chatPrivacy: String)
@@ -169,6 +181,21 @@ interface NewsickApiService {
 
     @POST("api/register")
     suspend fun register(@Body r: RegisterRequest): retrofit2.Response<AuthResponse>
+
+    @POST("api/auth/send-code")
+    suspend fun sendVerificationCode(@Body r: SendCodeRequest): retrofit2.Response<Map<String, @JvmSuppressWildcards Any>>
+
+    @POST("api/auth/verify-code")
+    suspend fun verifyCode(@Body r: VerifyCodeRequest): retrofit2.Response<Map<String, Boolean>>
+
+    @POST("api/auth/change-password")
+    suspend fun changePassword(@Body r: ChangePasswordRequest): retrofit2.Response<Map<String, Boolean>>
+
+    @POST("api/auth/switch-account")
+    suspend fun switchAccount(@Body r: SwitchAccountRequest): retrofit2.Response<AuthResponse>
+
+    @GET("api/users/by-email/{email}")
+    suspend fun getUsersByEmail(@Path("email") email: String): retrofit2.Response<List<UserResponse>>
 
     @GET("api/health")
     suspend fun healthCheck(): retrofit2.Response<String>
@@ -217,7 +244,7 @@ interface NewsickApiService {
     @PUT("api/profile")
     suspend fun updateProfile(@Body r: UpdateProfileRequest): retrofit2.Response<UserResponse>
 
-    @DELETE("api/account")
+    @HTTP(method = "DELETE", path = "api/account", hasBody = true)
     suspend fun deleteAccount(@Body r: DeleteAccountRequest): retrofit2.Response<Unit>
 
     // Amigos
@@ -282,6 +309,22 @@ interface NewsickApiService {
 
     @GET("api/version/latest")
     suspend fun getLatestVersion(): retrofit2.Response<LatestVersionResponse>
+
+    // Stickers
+    @POST("api/stickers")
+    suspend fun createSticker(@Body r: CreateStickerRequest): retrofit2.Response<StickerDto>
+
+    @GET("api/stickers/mine")
+    suspend fun getMyStickers(): retrofit2.Response<List<StickerDto>>
+
+    @GET("api/stickers/favorites")
+    suspend fun getFavoriteStickers(): retrofit2.Response<List<StickerDto>>
+
+    @POST("api/stickers/{id}/favorite")
+    suspend fun favoriteSticker(@Path("id") id: Int): retrofit2.Response<Map<String, Boolean>>
+
+    @GET("api/stickers/{id}")
+    suspend fun getStickerInfo(@Path("id") id: Int): retrofit2.Response<StickerDto>
 
     // Chat
     @GET("api/chats")

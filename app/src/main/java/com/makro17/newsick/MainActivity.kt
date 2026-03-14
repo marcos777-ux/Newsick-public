@@ -15,6 +15,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -97,6 +98,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val prefs by lazy {
         getApplication<Application>().getSharedPreferences("newsick_prefs", Context.MODE_PRIVATE)
     }
+    // Preferencias de UI en fichero separado — NUNCA se borran al cerrar sesión
+    private val settingsPrefs by lazy {
+        getApplication<Application>().getSharedPreferences("newsick_settings", Context.MODE_PRIVATE)
+    }
     val db   = NewsickDatabase.getDatabase(application)
     private val repo = NewsickRepository(db)
 
@@ -107,11 +112,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var authError          = mutableStateOf<String?>(null)
     var isRegistering      = mutableStateOf(false)
     var needsUsername      = mutableStateOf(false)
+    // Auth flow: "login" | "register_email" | "register_verify" | "register_username" | "reset_send" | "reset_verify" | "reset_new"
+    var authStep           = mutableStateOf("login")
+    var authPendingEmail   = mutableStateOf("")
+    var authPendingCode    = mutableStateOf("")
+    var authPrefillId      = mutableStateOf("") // username/email pre-rellenado al cambiar cuenta
     var loggedUsername     = mutableStateOf("")
     var loggedBio          = mutableStateOf("")
     var loggedEmail        = mutableStateOf("")
     var loggedProfilePhoto = mutableStateOf("")
     var loggedUserId       = mutableStateOf(0)
+
+    // Sesión guardada temporalmente al pulsar "Añadir cuenta" para poder cancelar y volver
+    private data class SavedSession(
+        val userId: Int, val username: String, val bio: String,
+        val email: String, val profilePhoto: String, val token: String
+    )
+    private var savedSession: SavedSession? = null
+    val canCancelAddAccount get() = savedSession != null
 
     var userSearchQuery    = mutableStateOf("")
     var searchResults      = mutableStateOf<List<UserResponse>>(emptyList())
@@ -132,8 +150,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // Canciones de amigos rankeadas
     var friendsSongs       = mutableStateOf<List<FriendSongEntry>>(emptyList())
 
-    // Dark mode: null = sistema, true = oscuro, false = claro
-    var darkModeOverride   = mutableStateOf<Boolean?>(null)
+    // darkModeOverride se guarda en newsick_settings (aislado de la sesión).
+    // Si el valor aún no está ahí pero existe en newsick_prefs (versión anterior),
+    // se migra automáticamente la primera vez.
+    private val prefsEager = getApplication<Application>().run {
+        val settings = getSharedPreferences("newsick_settings", Context.MODE_PRIVATE)
+        if (!settings.contains("dark_mode")) {
+            val legacy = getSharedPreferences("newsick_prefs", Context.MODE_PRIVATE)
+            if (legacy.contains("dark_mode")) {
+                settings.edit().putInt("dark_mode", legacy.getInt("dark_mode", -1)).apply()
+            }
+        }
+        settings
+    }
+    var darkModeOverride = mutableStateOf<Boolean?>(
+        when (prefsEager.getInt("dark_mode", -1)) { 0 -> false; 1 -> true; else -> null }
+    )
 
     // Pista preseleccionada para publicar desde recomendación
     var pendingUploadTrack = mutableStateOf<PendingUploadTrack?>(null)
@@ -158,9 +190,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 AuthManager.token        = prefs.getString("token", "") ?: ""
                 AuthManager.userId       = saved
                 isLoggedIn.value         = true
+                // Asegurar que la sesión activa está en la lista de sesiones guardadas
+                val ids = getSavedSessionIds().toMutableSet(); ids.add(saved)
+                if (!prefs.contains("session_${saved}_token")) {
+                    prefs.edit().apply {
+                        putString("session_${saved}_token",    AuthManager.token)
+                        putString("session_${saved}_username", loggedUsername.value)
+                        putString("session_${saved}_email",    loggedEmail.value)
+                        putString("session_${saved}_bio",      loggedBio.value)
+                        putString("session_${saved}_photo",    loggedProfilePhoto.value)
+                        putString("session_ids", ids.joinToString(","))
+                        apply()
+                    }
+                }
             }
-            val savedTheme = prefs.getInt("dark_mode", -1)
-            darkModeOverride.value = when (savedTheme) { 0 -> false; 1 -> true; else -> null }
             delay(1000)
             _isLoading.value = false
         }
@@ -170,28 +213,69 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setDarkMode(value: Boolean?) {
         darkModeOverride.value = value
-        prefs.edit().putInt("dark_mode", when (value) { false -> 0; true -> 1; else -> -1 }).apply()
+        settingsPrefs.edit().putInt("dark_mode", when (value) { false -> 0; true -> 1; else -> -1 }).apply()
+    }
+
+    // ── AÑADIR CUENTA ─────────────────────────────────────
+
+    /** Guarda la sesión actual y va al login sin borrar el dark mode ni los datos. */
+    fun startAddAccount() {
+        // Capturar el valor actual del dark mode ANTES del logout para restaurarlo si es necesario
+        val currentDark = darkModeOverride.value
+        savedSession = SavedSession(
+            userId       = loggedUserId.value,
+            username     = loggedUsername.value,
+            bio          = loggedBio.value,
+            email        = loggedEmail.value,
+            profilePhoto = loggedProfilePhoto.value,
+            token        = AuthManager.token
+        )
+        logout()
+        // logout() no toca darkModeOverride, pero lo reasignamos por si acaso
+        darkModeOverride.value = currentDark
+    }
+
+    /** Restaura la sesión anterior si el usuario cancela "Añadir cuenta". */
+    fun cancelAddAccount() {
+        val s = savedSession ?: return
+        savedSession = null
+        saveSession(AuthResponse(
+            user  = UserResponse(id = s.userId, email = s.email, username = s.username,
+                                 bio = s.bio, profilePhoto = s.profilePhoto),
+            token = s.token
+        ))
+        authError.value = null
     }
 
     // ── AUTH ──────────────────────────────────────────────
 
-    fun performLogin(email: String, pass: String) {
+    fun performLogin(identifier: String, pass: String) {
         viewModelScope.launch {
             _isLoading.value = true; authError.value = null
             try {
-                val r = api.login(LoginRequest(email, pass))
+                val r = api.login(LoginRequest(identifier, pass))
                 if (r.isSuccessful) saveSession(r.body()!!)
-                else authError.value = "Correo o contraseña incorrectos"
+                else authError.value = "Credenciales incorrectas"
             } catch (e: Exception) { authError.value = "Error de conexión: ${e.message}" }
             _isLoading.value = false
         }
     }
 
+    suspend fun performLoginAsync(identifier: String, pass: String, onResult: (Boolean) -> Unit) {
+        _isLoading.value = true; authError.value = null
+        try {
+            val r = api.login(LoginRequest(identifier, pass))
+            if (r.isSuccessful) { saveSession(r.body()!!); onResult(true) }
+            else { authError.value = "Credenciales incorrectas"; onResult(false) }
+        } catch (e: Exception) { authError.value = "Error de conexión: ${e.message}"; onResult(false) }
+        _isLoading.value = false
+    }
+
     fun prepareRegister(email: String, pass: String) {
         pendingEmail = email; pendingPassword = pass; needsUsername.value = true
     }
-    private var pendingEmail    = ""
-    private var pendingPassword = ""
+    var pendingEmail    = ""
+    var pendingPassword = ""
 
     fun performRegister(email: String, pass: String, username: String) {
         val err = validateUsername(username)
@@ -202,7 +286,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val r = api.register(RegisterRequest(email, pass, username))
                 if (r.isSuccessful) saveSession(r.body()!!)
                 else authError.value = when (r.code()) {
-                    409  -> "Nombre de usuario o email ya en uso"
+                    409  -> "Nombre de usuario ya en uso"
                     400  -> "Nombre de usuario inválido"
                     else -> "Error al registrarse"
                 }
@@ -212,6 +296,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun saveSession(auth: AuthResponse) {
+        savedSession             = null
         loggedUserId.value       = auth.user.id
         loggedUsername.value     = auth.user.username
         loggedBio.value          = auth.user.bio ?: ""
@@ -220,23 +305,185 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         AuthManager.token        = auth.token
         AuthManager.userId       = auth.user.id
         isLoggedIn.value         = true
+        val uid = auth.user.id
         prefs.edit().apply {
-            putInt("user_id", auth.user.id); putString("username", auth.user.username)
-            putString("bio", auth.user.bio ?: ""); putString("email", auth.user.email)
-            putString("token", auth.token); putString("profile_photo", auth.user.profilePhoto ?: "")
+            // Sesión activa
+            putInt("user_id", uid)
+            putString("username", auth.user.username)
+            putString("bio", auth.user.bio ?: "")
+            putString("email", auth.user.email)
+            putString("token", auth.token)
+            putString("profile_photo", auth.user.profilePhoto ?: "")
+            // Sesión individual por userId (para cambio sin contraseña)
+            putString("session_${uid}_token",   auth.token)
+            putString("session_${uid}_username", auth.user.username)
+            putString("session_${uid}_email",    auth.user.email)
+            putString("session_${uid}_bio",      auth.user.bio ?: "")
+            putString("session_${uid}_photo",    auth.user.profilePhoto ?: "")
+            // Añadir a lista de sesiones abiertas
+            val ids = getSavedSessionIds().toMutableSet(); ids.add(uid)
+            putString("session_ids", ids.joinToString(","))
             apply()
         }
     }
 
-    fun logout() {
+    /** IDs de usuarios con sesión guardada en este dispositivo. */
+    private fun getSavedSessionIds(): Set<Int> {
+        val raw = prefs.getString("session_ids", "") ?: ""
+        return raw.split(",").mapNotNull { it.trim().toIntOrNull() }.toSet()
+    }
+
+    /** Devuelve la primera sesión guardada diferente al usuario actual, o null. */
+    private fun findOtherSavedSession(excludeId: Int): AuthResponse? {
+        for (uid in getSavedSessionIds()) {
+            if (uid == excludeId) continue
+            val token    = prefs.getString("session_${uid}_token", null) ?: continue
+            val username = prefs.getString("session_${uid}_username", "") ?: ""
+            val email    = prefs.getString("session_${uid}_email", "") ?: ""
+            val bio      = prefs.getString("session_${uid}_bio", "") ?: ""
+            val photo    = prefs.getString("session_${uid}_photo", "") ?: ""
+            return AuthResponse(
+                user  = UserResponse(id = uid, email = email, username = username,
+                                     bio = bio, profilePhoto = photo),
+                token = token
+            )
+        }
+        return null
+    }
+
+    /** True si existe un token guardado para este userId. */
+    fun hasSavedSession(userId: Int) = prefs.getString("session_${userId}_token", null) != null
+
+    /** Devuelve todas las sesiones guardadas en este dispositivo (incluyendo la activa). */
+    fun getAllSavedSessions(): List<UserResponse> {
+        return getSavedSessionIds().mapNotNull { uid ->
+            val token    = prefs.getString("session_${uid}_token", null) ?: return@mapNotNull null
+            val username = prefs.getString("session_${uid}_username", "") ?: ""
+            val email    = prefs.getString("session_${uid}_email", "") ?: ""
+            val bio      = prefs.getString("session_${uid}_bio", "") ?: ""
+            val photo    = prefs.getString("session_${uid}_photo", "") ?: ""
+            UserResponse(id = uid, email = email, username = username, bio = bio, profilePhoto = photo)
+        }
+    }
+
+    fun logout(prefillId: String = "") {
+        val currentId = loggedUserId.value
+
+        // Eliminar sesión del usuario actual de la lista
+        val ids = getSavedSessionIds().toMutableSet(); ids.remove(currentId)
+        prefs.edit().apply {
+            remove("session_ids")
+            if (ids.isNotEmpty()) putString("session_ids", ids.joinToString(","))
+            // Borrar token guardado del usuario actual (fuerza contraseña al volver)
+            remove("session_${currentId}_token")
+            remove("session_${currentId}_username")
+            remove("session_${currentId}_email")
+            remove("session_${currentId}_bio")
+            remove("session_${currentId}_photo")
+            // Borrar sesión activa (sin tocar dark_mode ni otros ajustes)
+            remove("user_id"); remove("username"); remove("bio")
+            remove("email"); remove("token"); remove("profile_photo")
+            apply()
+        }
+
         isLoggedIn.value = false; isRegistering.value = false; needsUsername.value = false
+        authStep.value = "login"; authPendingEmail.value = ""; authPendingCode.value = ""
+        if (prefillId.isNotBlank()) authPrefillId.value = prefillId
         loggedUserId.value = 0; loggedUsername.value = ""; loggedBio.value = ""
         loggedEmail.value = ""; loggedProfilePhoto.value = ""
         AuthManager.token = ""; AuthManager.userId = 0
-        prefs.edit().clear().apply()
+        // NO tocar darkModeOverride: el usuario no cambió su preferencia de tema
         feedPhotoGroups.value = emptyList(); apiFeed.value = emptyList()
         mixedPhotosCache.value = emptyMap(); friendsSongs.value = emptyList()
         shownNotifIds.clear()
+    }
+
+    /** Cierra sesión intentando cambiar a otra cuenta abierta. Si no hay, va al login. */
+    fun logoutSmart() {
+        val other = findOtherSavedSession(loggedUserId.value)
+        logout()              // elimina las claves del usuario actual de prefs/session_ids
+        if (other != null) saveSession(other)   // restaura la otra sesión
+    }
+
+    /** Cambia a otra cuenta: sin contraseña si hay sesión guardada, con contraseña si no. */
+    fun switchAccountIfPossible(
+        target: UserResponse,
+        onNeedPassword: () -> Unit
+    ) {
+        if (hasSavedSession(target.id)) {
+            // Restaurar sesión guardada directamente
+            val token    = prefs.getString("session_${target.id}_token", "") ?: ""
+            val username = prefs.getString("session_${target.id}_username", target.username) ?: target.username
+            val email    = prefs.getString("session_${target.id}_email", target.email) ?: target.email
+            val bio      = prefs.getString("session_${target.id}_bio", "") ?: ""
+            val photo    = prefs.getString("session_${target.id}_photo", "") ?: ""
+            saveSession(AuthResponse(
+                user  = UserResponse(id = target.id, email = email, username = username,
+                                     bio = bio, profilePhoto = photo),
+                token = token
+            ))
+        } else {
+            onNeedPassword()
+        }
+    }
+
+    // ── NEW AUTH FLOWS ────────────────────────────────────
+
+    fun sendVerificationCode(email: String, purpose: String, onResult: (Boolean, String?) -> Unit) {
+        viewModelScope.launch {
+            _isLoading.value = true; authError.value = null
+            try {
+                val r = api.sendVerificationCode(SendCodeRequest(email, purpose))
+                if (r.isSuccessful) {
+                    // Si el servidor no tiene SMTP configurado devuelve devCode para desarrollo
+                    val devCode = r.body()?.get("devCode")?.toString()
+                    onResult(true, devCode)
+                } else {
+                    authError.value = "No se pudo enviar el código. Inténtalo de nuevo."
+                    onResult(false, null)
+                }
+            } catch (e: Exception) { authError.value = "Error de conexión: ${e.message}"; onResult(false, null) }
+            _isLoading.value = false
+        }
+    }
+
+    fun verifyCode(email: String, code: String, purpose: String, onResult: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            _isLoading.value = true; authError.value = null
+            try {
+                val r = api.verifyCode(VerifyCodeRequest(email, code, purpose))
+                if (r.isSuccessful) onResult(true)
+                else { authError.value = "Código incorrecto o caducado"; onResult(false) }
+            } catch (e: Exception) { authError.value = "Error de conexión"; onResult(false) }
+            _isLoading.value = false
+        }
+    }
+
+    fun changePassword(email: String, code: String, newPassword: String, onResult: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            _isLoading.value = true; authError.value = null
+            try {
+                val r = api.changePassword(ChangePasswordRequest(email, code, newPassword))
+                onResult(r.isSuccessful)
+            } catch (e: Exception) { authError.value = "Error de conexión"; onResult(false) }
+            _isLoading.value = false
+        }
+    }
+
+    suspend fun getAccountsByEmail(email: String): List<UserResponse> = try {
+        val r = api.getUsersByEmail(email); if (r.isSuccessful) r.body() ?: emptyList() else emptyList()
+    } catch (_: Exception) { emptyList() }
+
+    fun loginAs(auth: AuthResponse) = saveSession(auth)
+
+    fun switchAccount(targetUserId: Int, onResult: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val r = api.switchAccount(SwitchAccountRequest(targetUserId))
+                if (r.isSuccessful) { saveSession(r.body()!!); onResult(true) }
+                else onResult(false)
+            } catch (e: Exception) { onResult(false) }
+        }
     }
 
     // ── PERFIL ────────────────────────────────────────────
@@ -544,6 +791,21 @@ class MainActivity : ComponentActivity() {
             requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 0)
         }
         enableEdgeToEdge()
+        // Leer dark mode desde newsick_settings con migración desde newsick_prefs si hace falta.
+        run {
+            val settings = getSharedPreferences("newsick_settings", Context.MODE_PRIVATE)
+            if (!settings.contains("dark_mode")) {
+                val legacy = getSharedPreferences("newsick_prefs", Context.MODE_PRIVATE)
+                if (legacy.contains("dark_mode")) {
+                    settings.edit().putInt("dark_mode", legacy.getInt("dark_mode", -1)).apply()
+                }
+            }
+            viewModel.darkModeOverride.value = when (settings.getInt("dark_mode", -1)) {
+                0    -> false
+                1    -> true
+                else -> null
+            }
+        }
         setContent {
             val systemDark   = isSystemInDarkTheme()
             val darkOverride by viewModel.darkModeOverride
@@ -551,6 +813,20 @@ class MainActivity : ComponentActivity() {
             var updateUrl       by remember { mutableStateOf<String?>(null) }
             var latestVersion   by remember { mutableStateOf<String?>(null) }
             val context = LocalContext.current
+
+            // Deep link desde notificación de chat
+            var pendingChatNav by remember {
+                val i = intent
+                val target = i?.getStringExtra(NotificationHelper.EXTRA_NAV_TARGET)
+                mutableStateOf(
+                    if (target == "chat") Triple(
+                        i.getIntExtra(NotificationHelper.EXTRA_CONVERSATION_ID, -1),
+                        i.getIntExtra(NotificationHelper.EXTRA_OTHER_USER_ID, 0),
+                        i.getStringExtra(NotificationHelper.EXTRA_OTHER_USERNAME) to
+                                i.getStringExtra(NotificationHelper.EXTRA_OTHER_PHOTO)
+                    ) else null
+                )
+            }
 
             LaunchedEffect(Unit) {
                 try {
@@ -588,8 +864,16 @@ class MainActivity : ComponentActivity() {
 
             MaterialTheme(colorScheme = if (isDark) darkColorScheme() else lightColorScheme()) {
                 val windowSize = calculateWindowSizeClass(this)
-                if (viewModel.isLoggedIn.value) NewsickApp(windowSize.widthSizeClass, viewModel)
-                else AuthScreen(viewModel)
+                if (viewModel.isLoggedIn.value) NewsickApp(
+                    windowSize     = windowSize.widthSizeClass,
+                    viewModel      = viewModel,
+                    pendingChatNav = pendingChatNav,
+                    onNavConsumed  = { pendingChatNav = null }
+                )
+                else AuthScreen(
+                    viewModel = viewModel,
+                    onBack    = if (viewModel.canCancelAddAccount) ({ viewModel.cancelAddAccount() }) else null
+                )
             }
         }
     }
@@ -600,7 +884,12 @@ class MainActivity : ComponentActivity() {
 // ══════════════════════════════════════════════════════════
 
 @Composable
-fun NewsickApp(windowSize: WindowWidthSizeClass, viewModel: MainViewModel) {
+fun NewsickApp(
+    windowSize: WindowWidthSizeClass,
+    viewModel: MainViewModel,
+    pendingChatNav: Triple<Int, Int, Pair<String?, String?>>? = null,
+    onNavConsumed: () -> Unit = {}
+) {
     val navController = rememberNavController()
     val currentRoute  = navController.currentBackStackEntryAsState().value?.destination?.route
     val context       = LocalContext.current
@@ -608,7 +897,21 @@ fun NewsickApp(windowSize: WindowWidthSizeClass, viewModel: MainViewModel) {
     LaunchedEffect(Unit) {
         viewModel.loadNotificationsData(context)
         viewModel.loadFriendCount()
-        viewModel.loadFeedPhotos()   // nuevo feed de fotos
+        viewModel.loadFeedPhotos()
+    }
+
+    // Navegar al chat si se abrió desde una notificación
+    LaunchedEffect(pendingChatNav) {
+        val nav = pendingChatNav ?: return@LaunchedEffect
+        val (convId, otherUid, userInfo) = nav
+        if (convId > 0) {
+            val username = userInfo.first ?: ""
+            val photo    = userInfo.second ?: ""
+            navController.navigate(
+                "chat/$convId/$otherUid?username=${android.net.Uri.encode(username)}&photo=${android.net.Uri.encode(photo)}"
+            ) { launchSingleTop = true }
+            onNavConsumed()
+        }
     }
 
     Scaffold(
@@ -663,7 +966,12 @@ fun NewsickApp(windowSize: WindowWidthSizeClass, viewModel: MainViewModel) {
                 )
             }
             composable("settings") {
-                SettingsScreen(viewModel = viewModel, onBack = { navController.popBackStack() }, onLogout = { viewModel.logout() })
+                SettingsScreen(
+                    viewModel    = viewModel,
+                    onBack       = { navController.popBackStack() },
+                    onLogout     = { viewModel.logoutSmart() },
+                    onAddAccount = { viewModel.startAddAccount() }
+                )
             }
             composable("friends") {
                 FriendsPagerScreen(
@@ -697,7 +1005,22 @@ fun NewsickApp(windowSize: WindowWidthSizeClass, viewModel: MainViewModel) {
                 )
             }
             composable("notifications") {
-                NotificationsScreen(viewModel,
+                NotificationsScreen(
+                    viewModel        = viewModel,
+                    onBack           = { navController.popBackStack() },
+                    onUserClick      = navigateToUser,
+                    onRequestsClick  = { navController.navigate("friend_requests") },
+                    onChatClick      = { convId ->
+                        // Navegar al chat con el ID de conversación; username/photo se cargan desde API
+                        navController.navigate("chat/$convId/0?username=&photo=") {
+                            launchSingleTop = true
+                        }
+                    }
+                )
+            }
+            composable("friend_requests") {
+                FriendRequestsScreen(
+                    viewModel   = viewModel,
                     onBack      = { navController.popBackStack() },
                     onUserClick = navigateToUser
                 )
@@ -730,83 +1053,422 @@ fun NewsickApp(windowSize: WindowWidthSizeClass, viewModel: MainViewModel) {
 }
 
 // ══════════════════════════════════════════════════════════
-// AUTH SCREEN
+// AUTH SCREEN — multi-paso con verificación por email
 // ══════════════════════════════════════════════════════════
 
 @Composable
-fun AuthScreen(viewModel: MainViewModel) {
-    var email    by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    var username by remember { mutableStateOf("") }
-
-    val isReg     = viewModel.isRegistering.value
-    val needUser  = viewModel.needsUsername.value
+fun AuthScreen(viewModel: MainViewModel, onBack: (() -> Unit)? = null) {
+    val step      = viewModel.authStep.value
     val isLoading = viewModel.isLoading.collectAsState().value
     val authError = viewModel.authError.value
-    val usernameError = if (needUser && username.isNotBlank()) validateUsername(username) else null
 
     Box(Modifier.fillMaxSize(), Alignment.Center) {
-        Column(Modifier.padding(32.dp).fillMaxWidth(),
+        Column(
+            Modifier
+                .padding(32.dp)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center) {
+            verticalArrangement = Arrangement.Center
+        ) {
+            when (step) {
+                // ── Inicio de sesión ──────────────────────────
+                "login" -> AuthLoginStep(viewModel, isLoading, authError, onBack = onBack)
 
-            Icon(if (needUser) Icons.Default.AccountCircle else Icons.Default.MusicNote,
-                null, Modifier.size(80.dp), tint = MaterialTheme.colorScheme.primary)
-            Spacer(Modifier.height(16.dp))
-            Text(when { needUser -> "Elige tu nombre de usuario"; isReg -> "Crea tu cuenta"; else -> "Bienvenido a Newsick" },
-                style = MaterialTheme.typography.headlineMedium)
-            Spacer(Modifier.height(32.dp))
+                // ── Registro: introducir email + contraseña ───
+                "register_email" -> AuthRegisterEmailStep(viewModel, isLoading, authError)
 
-            if (!needUser) {
-                OutlinedTextField(email, { email = it }, Modifier.fillMaxWidth(),
-                    label = { Text("Correo electrónico") }, singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email))
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(password, { password = it }, Modifier.fillMaxWidth(),
-                    label = { Text("Contraseña") },
-                    visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), singleLine = true)
-            } else {
-                Text("Solo letras, números, puntos y guiones bajos",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center, modifier = Modifier.padding(bottom = 8.dp))
-                OutlinedTextField(
-                    value = username, onValueChange = { if (it.length <= 30) username = it },
-                    modifier = Modifier.fillMaxWidth(), label = { Text("Nombre de usuario") }, singleLine = true,
-                    isError = usernameError != null, supportingText = usernameError?.let { { Text(it) } }
+                // ── Registro: verificar código ────────────────
+                "register_verify" -> AuthVerifyStep(
+                    viewModel   = viewModel,
+                    isLoading   = isLoading,
+                    authError   = authError,
+                    title       = "Verifica tu correo",
+                    subtitle    = "Introduce el código de 6 dígitos que hemos enviado a ${viewModel.authPendingEmail.value}",
+                    purpose     = "register",
+                    onVerified  = { viewModel.authStep.value = "register_username" },
+                    onBack      = { viewModel.authStep.value = "register_email"; viewModel.authError.value = null }
                 )
-            }
 
-            authError?.let {
-                Spacer(Modifier.height(8.dp))
-                Text(it, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
-            }
-            Spacer(Modifier.height(24.dp))
+                // ── Registro: elegir nombre de usuario ────────
+                "register_username" -> AuthUsernameStep(viewModel, isLoading, authError)
 
-            Button(
-                onClick = {
-                    when {
-                        needUser -> viewModel.performRegister(email, password, username)
-                        isReg    -> { if (email.contains("@") && password.length >= 6) viewModel.prepareRegister(email, password) else viewModel.authError.value = "Correo válido y mínimo 6 caracteres" }
-                        else     -> viewModel.performLogin(email, password)
-                    }
-                },
-                Modifier.fillMaxWidth(),
-                enabled = !isLoading && (if (needUser) username.isNotBlank() && usernameError == null else true)
-            ) {
-                if (isLoading) CircularProgressIndicator(Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary)
-                else Text(when { needUser -> "Finalizar"; isReg -> "Siguiente"; else -> "Iniciar Sesión" })
-            }
-            Spacer(Modifier.height(16.dp))
-            if (!needUser) {
-                TextButton(onClick = { viewModel.isRegistering.value = !isReg; viewModel.authError.value = null }) {
-                    Text(if (isReg) "¿Ya tienes cuenta? Entra aquí" else "¿No tienes cuenta? Regístrate")
-                }
-            } else {
-                TextButton(onClick = { viewModel.needsUsername.value = false }) { Text("Volver") }
+                // ── Reset: enviar código ──────────────────────
+                "reset_send" -> AuthResetSendStep(viewModel, isLoading, authError)
+
+                // ── Reset: verificar código ───────────────────
+                "reset_verify" -> AuthVerifyStep(
+                    viewModel   = viewModel,
+                    isLoading   = isLoading,
+                    authError   = authError,
+                    title       = "Verifica tu identidad",
+                    subtitle    = "Introduce el código enviado a ${viewModel.authPendingEmail.value}",
+                    purpose     = "reset",
+                    onVerified  = { viewModel.authStep.value = "reset_new" },
+                    onBack      = { viewModel.authStep.value = "reset_send"; viewModel.authError.value = null }
+                )
+
+                // ── Reset: nueva contraseña ───────────────────
+                "reset_new" -> AuthNewPasswordStep(viewModel, isLoading, authError)
             }
         }
+    }
+}
+
+@Composable
+private fun AuthHeader(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String) {
+    Icon(icon, null, Modifier.size(72.dp), tint = MaterialTheme.colorScheme.primary)
+    Spacer(Modifier.height(12.dp))
+    Text(title, style = MaterialTheme.typography.headlineSmall, textAlign = TextAlign.Center)
+    Spacer(Modifier.height(28.dp))
+}
+
+// ── Paso: Login ───────────────────────────────────────────
+
+@Composable
+private fun AuthLoginStep(
+    viewModel: MainViewModel,
+    isLoading: Boolean,
+    authError: String?,
+    onBack: (() -> Unit)? = null
+) {
+    var identifier by remember { mutableStateOf(viewModel.authPrefillId.value) }
+    var password   by remember { mutableStateOf("") }
+    var passVisible by remember { mutableStateOf(false) }
+
+    // Limpiar prefill tras leerlo
+    LaunchedEffect(Unit) { viewModel.authPrefillId.value = "" }
+
+    // Botón de volver (solo visible al añadir cuenta)
+    if (onBack != null) {
+        Row(Modifier.fillMaxWidth()) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, "Volver")
+            }
+        }
+    }
+
+    AuthHeader(Icons.Default.MusicNote, "Bienvenido a Newsick")
+
+    OutlinedTextField(
+        value = identifier, onValueChange = { identifier = it },
+        modifier = Modifier.fillMaxWidth(),
+        label = { Text("Email o nombre de usuario") },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email)
+    )
+    Spacer(Modifier.height(8.dp))
+    OutlinedTextField(
+        value = password, onValueChange = { password = it },
+        modifier = Modifier.fillMaxWidth(),
+        label = { Text("Contraseña") },
+        singleLine = true,
+        visualTransformation = if (passVisible) androidx.compose.ui.text.input.VisualTransformation.None else PasswordVisualTransformation(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+        trailingIcon = {
+            IconButton(onClick = { passVisible = !passVisible }) {
+                Icon(if (passVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility, null)
+            }
+        }
+    )
+    authError?.let {
+        Spacer(Modifier.height(8.dp))
+        Text(it, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
+    }
+    Spacer(Modifier.height(20.dp))
+    Button(
+        onClick = { viewModel.performLogin(identifier.trim(), password) },
+        modifier = Modifier.fillMaxWidth(),
+        enabled  = !isLoading && identifier.isNotBlank() && password.isNotBlank()
+    ) {
+        if (isLoading) CircularProgressIndicator(Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary)
+        else Text("Iniciar Sesión")
+    }
+    Spacer(Modifier.height(8.dp))
+    TextButton(onClick = {
+        viewModel.authStep.value = "register_email"
+        viewModel.authError.value = null
+    }) { Text("¿No tienes cuenta? Regístrate") }
+    TextButton(onClick = {
+        viewModel.authStep.value = "reset_send"
+        viewModel.authError.value = null
+    }) { Text("¿Olvidaste tu contraseña?") }
+}
+
+// ── Paso: Registro — email + contraseña ──────────────────
+
+@Composable
+private fun AuthRegisterEmailStep(viewModel: MainViewModel, isLoading: Boolean, authError: String?) {
+    var email    by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var confirm  by remember { mutableStateOf("") }
+    var passVisible by remember { mutableStateOf(false) }
+
+    AuthHeader(Icons.Default.PersonAdd, "Crea tu cuenta")
+
+    OutlinedTextField(
+        value = email, onValueChange = { email = it },
+        modifier = Modifier.fillMaxWidth(),
+        label = { Text("Correo electrónico") },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email)
+    )
+    Spacer(Modifier.height(8.dp))
+    OutlinedTextField(
+        value = password, onValueChange = { password = it },
+        modifier = Modifier.fillMaxWidth(),
+        label = { Text("Contraseña (mín. 6 caracteres)") },
+        singleLine = true,
+        visualTransformation = if (passVisible) androidx.compose.ui.text.input.VisualTransformation.None else PasswordVisualTransformation(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+        trailingIcon = {
+            IconButton(onClick = { passVisible = !passVisible }) {
+                Icon(if (passVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility, null)
+            }
+        }
+    )
+    Spacer(Modifier.height(8.dp))
+    OutlinedTextField(
+        value = confirm, onValueChange = { confirm = it },
+        modifier = Modifier.fillMaxWidth(),
+        label = { Text("Repetir contraseña") },
+        singleLine = true,
+        visualTransformation = PasswordVisualTransformation(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+        isError = confirm.isNotBlank() && confirm != password,
+        supportingText = if (confirm.isNotBlank() && confirm != password) ({ Text("Las contraseñas no coinciden") }) else null
+    )
+    authError?.let {
+        Spacer(Modifier.height(8.dp))
+        Text(it, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
+    }
+    Spacer(Modifier.height(20.dp))
+    Button(
+        onClick = {
+            if (!email.contains("@")) { viewModel.authError.value = "Introduce un email válido"; return@Button }
+            if (password.length < 6) { viewModel.authError.value = "La contraseña debe tener al menos 6 caracteres"; return@Button }
+            if (password != confirm) { viewModel.authError.value = "Las contraseñas no coinciden"; return@Button }
+            viewModel.authPendingEmail.value = email.trim()
+            viewModel.prepareRegister(email.trim(), password)
+            viewModel.sendVerificationCode(email.trim(), "register") { ok, devCode ->
+                if (ok) {
+                    if (devCode != null) viewModel.authPendingCode.value = devCode // rellena el código automáticamente (sin SMTP)
+                    viewModel.authStep.value = "register_verify"
+                }
+            }
+        },
+        modifier = Modifier.fillMaxWidth(),
+        enabled  = !isLoading && email.isNotBlank() && password.isNotBlank() && confirm.isNotBlank()
+    ) {
+        if (isLoading) CircularProgressIndicator(Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary)
+        else Text("Enviar código de verificación")
+    }
+    Spacer(Modifier.height(8.dp))
+    TextButton(onClick = { viewModel.authStep.value = "login"; viewModel.authError.value = null }) {
+        Text("¿Ya tienes cuenta? Entra aquí")
+    }
+}
+
+// ── Paso: Verificar código (registro o reset) ─────────────
+
+@Composable
+private fun AuthVerifyStep(
+    viewModel: MainViewModel, isLoading: Boolean, authError: String?,
+    title: String, subtitle: String, purpose: String,
+    onVerified: () -> Unit, onBack: () -> Unit
+) {
+    // Si authPendingCode tiene valor (devCode del servidor sin SMTP), lo usamos como valor inicial
+    var code by remember { mutableStateOf(viewModel.authPendingCode.value) }
+    val scope = rememberCoroutineScope()
+
+    AuthHeader(Icons.Default.MarkEmailRead, title)
+
+    Text(subtitle,
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = TextAlign.Center)
+    Spacer(Modifier.height(20.dp))
+    OutlinedTextField(
+        value = code, onValueChange = { if (it.length <= 6 && it.all { c -> c.isDigit() }) code = it },
+        modifier = Modifier.fillMaxWidth(),
+        label = { Text("Código de 6 dígitos") },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+    )
+    authError?.let {
+        Spacer(Modifier.height(8.dp))
+        Text(it, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
+    }
+    Spacer(Modifier.height(20.dp))
+    Button(
+        onClick = {
+            viewModel.authPendingCode.value = code
+            viewModel.verifyCode(viewModel.authPendingEmail.value, code, purpose) { ok ->
+                if (ok) onVerified()
+            }
+        },
+        modifier = Modifier.fillMaxWidth(),
+        enabled  = !isLoading && code.length == 6
+    ) {
+        if (isLoading) CircularProgressIndicator(Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary)
+        else Text("Verificar")
+    }
+    Spacer(Modifier.height(8.dp))
+    TextButton(onClick = {
+        scope.launch {
+            viewModel.sendVerificationCode(viewModel.authPendingEmail.value, purpose) { _, devCode ->
+                if (devCode != null) code = devCode
+            }
+        }
+    }) { Text("Reenviar código") }
+    TextButton(onClick = onBack) { Text("Volver") }
+}
+
+// ── Paso: Registro — elegir usuario ──────────────────────
+
+@Composable
+private fun AuthUsernameStep(viewModel: MainViewModel, isLoading: Boolean, authError: String?) {
+    var username by remember { mutableStateOf("") }
+    val usernameError = if (username.isNotBlank()) validateUsername(username) else null
+
+    AuthHeader(Icons.Default.AccountCircle, "Elige tu nombre de usuario")
+
+    Text("Solo letras, números, puntos y guiones bajos",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = TextAlign.Center)
+    Spacer(Modifier.height(12.dp))
+    OutlinedTextField(
+        value = username, onValueChange = { if (it.length <= 30) username = it },
+        modifier = Modifier.fillMaxWidth(),
+        label = { Text("Nombre de usuario") },
+        singleLine = true,
+        isError = usernameError != null,
+        supportingText = usernameError?.let { { Text(it) } }
+    )
+    authError?.let {
+        Spacer(Modifier.height(8.dp))
+        Text(it, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
+    }
+    Spacer(Modifier.height(20.dp))
+    Button(
+        onClick = { viewModel.performRegister(viewModel.authPendingEmail.value, viewModel.pendingPassword, username) },
+        modifier = Modifier.fillMaxWidth(),
+        enabled  = !isLoading && username.isNotBlank() && usernameError == null
+    ) {
+        if (isLoading) CircularProgressIndicator(Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary)
+        else Text("Crear cuenta")
+    }
+    Spacer(Modifier.height(8.dp))
+    TextButton(onClick = { viewModel.authStep.value = "register_verify"; viewModel.authError.value = null }) {
+        Text("Volver")
+    }
+}
+
+// ── Paso: Reset — enviar email ────────────────────────────
+
+@Composable
+private fun AuthResetSendStep(viewModel: MainViewModel, isLoading: Boolean, authError: String?) {
+    var email by remember { mutableStateOf("") }
+
+    AuthHeader(Icons.Default.LockReset, "Restablecer contraseña")
+
+    Text("Introduce tu correo electrónico y te enviaremos un código.",
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = TextAlign.Center)
+    Spacer(Modifier.height(20.dp))
+    OutlinedTextField(
+        value = email, onValueChange = { email = it },
+        modifier = Modifier.fillMaxWidth(),
+        label = { Text("Correo electrónico") },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email)
+    )
+    authError?.let {
+        Spacer(Modifier.height(8.dp))
+        Text(it, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
+    }
+    Spacer(Modifier.height(20.dp))
+    Button(
+        onClick = {
+            if (!email.contains("@")) { viewModel.authError.value = "Introduce un email válido"; return@Button }
+            viewModel.authPendingEmail.value = email.trim()
+            viewModel.sendVerificationCode(email.trim(), "reset") { ok, devCode ->
+                if (ok) {
+                    if (devCode != null) viewModel.authPendingCode.value = devCode
+                    viewModel.authStep.value = "reset_verify"
+                }
+            }
+        },
+        modifier = Modifier.fillMaxWidth(),
+        enabled  = !isLoading && email.isNotBlank()
+    ) {
+        if (isLoading) CircularProgressIndicator(Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary)
+        else Text("Enviar código")
+    }
+    Spacer(Modifier.height(8.dp))
+    TextButton(onClick = { viewModel.authStep.value = "login"; viewModel.authError.value = null }) {
+        Text("Volver al inicio de sesión")
+    }
+}
+
+// ── Paso: Reset — nueva contraseña ───────────────────────
+
+@Composable
+private fun AuthNewPasswordStep(viewModel: MainViewModel, isLoading: Boolean, authError: String?) {
+    var password by remember { mutableStateOf("") }
+    var confirm  by remember { mutableStateOf("") }
+    var passVisible by remember { mutableStateOf(false) }
+
+    AuthHeader(Icons.Default.Lock, "Nueva contraseña")
+
+    OutlinedTextField(
+        value = password, onValueChange = { password = it },
+        modifier = Modifier.fillMaxWidth(),
+        label = { Text("Nueva contraseña") },
+        singleLine = true,
+        visualTransformation = if (passVisible) androidx.compose.ui.text.input.VisualTransformation.None else PasswordVisualTransformation(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+        trailingIcon = {
+            IconButton(onClick = { passVisible = !passVisible }) {
+                Icon(if (passVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility, null)
+            }
+        }
+    )
+    Spacer(Modifier.height(8.dp))
+    OutlinedTextField(
+        value = confirm, onValueChange = { confirm = it },
+        modifier = Modifier.fillMaxWidth(),
+        label = { Text("Repetir contraseña") },
+        singleLine = true,
+        visualTransformation = PasswordVisualTransformation(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+        isError = confirm.isNotBlank() && confirm != password,
+        supportingText = if (confirm.isNotBlank() && confirm != password) ({ Text("Las contraseñas no coinciden") }) else null
+    )
+    authError?.let {
+        Spacer(Modifier.height(8.dp))
+        Text(it, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
+    }
+    Spacer(Modifier.height(20.dp))
+    Button(
+        onClick = {
+            if (password.length < 6) { viewModel.authError.value = "Mínimo 6 caracteres"; return@Button }
+            if (password != confirm)  { viewModel.authError.value = "Las contraseñas no coinciden"; return@Button }
+            viewModel.changePassword(viewModel.authPendingEmail.value, viewModel.authPendingCode.value, password) { ok ->
+                if (ok) { viewModel.authStep.value = "login"; viewModel.authError.value = null }
+            }
+        },
+        modifier = Modifier.fillMaxWidth(),
+        enabled  = !isLoading && password.isNotBlank() && confirm.isNotBlank()
+    ) {
+        if (isLoading) CircularProgressIndicator(Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary)
+        else Text("Guardar nueva contraseña")
+    }
+    Spacer(Modifier.height(8.dp))
+    TextButton(onClick = { viewModel.authStep.value = "reset_verify"; viewModel.authError.value = null }) {
+        Text("Volver")
     }
 }
 
@@ -816,7 +1478,7 @@ fun AuthScreen(viewModel: MainViewModel) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit, onLogout: () -> Unit) {
+fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit, onLogout: () -> Unit, onAddAccount: () -> Unit) {
     val context    = LocalContext.current
     val systemDark = isSystemInDarkTheme()
     val darkMode   by viewModel.darkModeOverride
@@ -1019,32 +1681,250 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit, onLogout: () ->
 
                 // ── Pestaña 3: Cuenta ──────────────────────
                 3 -> {
+                    // Todas las sesiones guardadas en este dispositivo (cualquier correo)
+                    var allSessions      by remember { mutableStateOf(viewModel.getAllSavedSessions()) }
+                    var showPassSheet    by remember { mutableStateOf(false) }
+                    var switchTarget     by remember { mutableStateOf<UserResponse?>(null) }
+                    var switchPass       by remember { mutableStateOf("") }
+                    var switchErr        by remember { mutableStateOf(false) }
+                    var switchLoading    by remember { mutableStateOf(false) }
+
+                    // Recargar al cambiar de cuenta activa
+                    LaunchedEffect(viewModel.loggedUserId.value) {
+                        allSessions = viewModel.getAllSavedSessions()
+                    }
+
+                    // ── Diálogo: contraseña para cambiar de cuenta ──
+                    switchTarget?.let { target ->
+                        AlertDialog(
+                            onDismissRequest = { if (!switchLoading) { switchTarget = null; switchPass = ""; switchErr = false } },
+                            title = { Text("Acceder como @${target.username}") },
+                            text = {
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text("Introduce la contraseña de esta cuenta.",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    OutlinedTextField(
+                                        value = switchPass,
+                                        onValueChange = { switchPass = it; switchErr = false },
+                                        label = { Text("Contraseña") },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        singleLine = true,
+                                        visualTransformation = PasswordVisualTransformation(),
+                                        isError = switchErr,
+                                        supportingText = if (switchErr) ({ Text("Contraseña incorrecta") }) else null,
+                                        enabled = !switchLoading
+                                    )
+                                }
+                            },
+                            confirmButton = {
+                                Button(
+                                    onClick = {
+                                        switchLoading = true; switchErr = false
+                                        scope.launch {
+                                            viewModel.performLoginAsync(target.username, switchPass) { ok ->
+                                                switchLoading = false
+                                                if (ok) { switchTarget = null; switchPass = "" }
+                                                else switchErr = true
+                                            }
+                                        }
+                                    },
+                                    enabled = switchPass.isNotBlank() && !switchLoading
+                                ) {
+                                    if (switchLoading) CircularProgressIndicator(Modifier.size(16.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
+                                    else Text("Entrar")
+                                }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { switchTarget = null; switchPass = ""; switchErr = false }, enabled = !switchLoading) {
+                                    Text("Cancelar")
+                                }
+                            }
+                        )
+                    }
+
+                    // ── Bottom sheet: cambiar contraseña ──────
+                    if (showPassSheet) {
+                        var passStep  by remember { mutableStateOf("send") } // send | verify | new
+                        var passCode  by remember { mutableStateOf("") }
+                        var newPass   by remember { mutableStateOf("") }
+                        var confirmP  by remember { mutableStateOf("") }
+                        var passErr   by remember { mutableStateOf<String?>(null) }
+                        var passLoad  by remember { mutableStateOf(false) }
+
+                        ModalBottomSheet(onDismissRequest = { showPassSheet = false }) {
+                            Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp)) {
+                                Text(
+                                    when (passStep) { "verify" -> "Introduce el código"; "new" -> "Nueva contraseña"; else -> "Cambiar contraseña" },
+                                    style = MaterialTheme.typography.titleMedium
+                                )
+                                Spacer(Modifier.height(16.dp))
+                                when (passStep) {
+                                    "send" -> {
+                                        Text("Te enviaremos un código al correo ${viewModel.loggedEmail.value}",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        passErr?.let { Spacer(Modifier.height(8.dp)); Text(it, color = MaterialTheme.colorScheme.error) }
+                                        Spacer(Modifier.height(20.dp))
+                                        Button(
+                                            onClick = {
+                                                passLoad = true; passErr = null
+                                                viewModel.sendVerificationCode(viewModel.loggedEmail.value, "reset") { ok, devCode ->
+                                                    passLoad = false
+                                                    if (ok) {
+                                                        if (devCode != null) passCode = devCode
+                                                        passStep = "verify"
+                                                    } else passErr = "Error al enviar el código"
+                                                }
+                                            },
+                                            modifier = Modifier.fillMaxWidth(), enabled = !passLoad
+                                        ) {
+                                            if (passLoad) CircularProgressIndicator(Modifier.size(18.dp), color = MaterialTheme.colorScheme.onPrimary)
+                                            else Text("Enviar código")
+                                        }
+                                    }
+                                    "verify" -> {
+                                        OutlinedTextField(
+                                            value = passCode,
+                                            onValueChange = { if (it.length <= 6 && it.all { c -> c.isDigit() }) passCode = it },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            label = { Text("Código de 6 dígitos") }, singleLine = true,
+                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                                        )
+                                        passErr?.let { Spacer(Modifier.height(8.dp)); Text(it, color = MaterialTheme.colorScheme.error) }
+                                        Spacer(Modifier.height(16.dp))
+                                        Button(
+                                            onClick = {
+                                                passLoad = true; passErr = null
+                                                viewModel.verifyCode(viewModel.loggedEmail.value, passCode, "reset") { ok ->
+                                                    passLoad = false
+                                                    if (ok) passStep = "new" else passErr = "Código incorrecto o caducado"
+                                                }
+                                            },
+                                            modifier = Modifier.fillMaxWidth(), enabled = !passLoad && passCode.length == 6
+                                        ) {
+                                            if (passLoad) CircularProgressIndicator(Modifier.size(18.dp), color = MaterialTheme.colorScheme.onPrimary)
+                                            else Text("Verificar")
+                                        }
+                                    }
+                                    "new" -> {
+                                        OutlinedTextField(
+                                            value = newPass, onValueChange = { newPass = it },
+                                            modifier = Modifier.fillMaxWidth(), label = { Text("Nueva contraseña") },
+                                            singleLine = true, visualTransformation = PasswordVisualTransformation(),
+                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password)
+                                        )
+                                        Spacer(Modifier.height(8.dp))
+                                        OutlinedTextField(
+                                            value = confirmP, onValueChange = { confirmP = it },
+                                            modifier = Modifier.fillMaxWidth(), label = { Text("Repetir contraseña") },
+                                            singleLine = true, visualTransformation = PasswordVisualTransformation(),
+                                            isError = confirmP.isNotBlank() && confirmP != newPass,
+                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password)
+                                        )
+                                        passErr?.let { Spacer(Modifier.height(8.dp)); Text(it, color = MaterialTheme.colorScheme.error) }
+                                        Spacer(Modifier.height(16.dp))
+                                        Button(
+                                            onClick = {
+                                                if (newPass.length < 6) { passErr = "Mínimo 6 caracteres"; return@Button }
+                                                if (newPass != confirmP) { passErr = "Las contraseñas no coinciden"; return@Button }
+                                                passLoad = true; passErr = null
+                                                viewModel.changePassword(viewModel.loggedEmail.value, passCode, newPass) { ok ->
+                                                    passLoad = false
+                                                    if (ok) showPassSheet = false else passErr = "Error al cambiar la contraseña"
+                                                }
+                                            },
+                                            modifier = Modifier.fillMaxWidth(), enabled = !passLoad && newPass.isNotBlank() && confirmP.isNotBlank()
+                                        ) {
+                                            if (passLoad) CircularProgressIndicator(Modifier.size(18.dp), color = MaterialTheme.colorScheme.onPrimary)
+                                            else Text("Guardar nueva contraseña")
+                                        }
+                                    }
+                                }
+                                Spacer(Modifier.height(24.dp))
+                            }
+                        }
+                    }
+
                     Text("Cuenta",
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.primary)
                     Spacer(Modifier.height(16.dp))
-                    Text("Usuario", style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.height(8.dp))
-                    Card(modifier = Modifier.fillMaxWidth()) {
-                        Row(
-                            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(Icons.Default.AccountCircle, null,
-                                modifier = Modifier.size(28.dp),
-                                tint = MaterialTheme.colorScheme.primary)
-                            Spacer(Modifier.width(14.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text(viewModel.loggedUsername.value,
-                                    style = MaterialTheme.typography.titleSmall)
-                                Text(viewModel.loggedEmail.value,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+                    // ── Sesiones guardadas en este dispositivo ─
+                    // Agrupadas por email para que quede claro cuáles comparten correo
+                    val sessionsByEmail = allSessions.groupBy { it.email }
+                    sessionsByEmail.entries.forEachIndexed { groupIdx, (email, accounts) ->
+                        if (groupIdx > 0) Spacer(Modifier.height(16.dp))
+                        Text(email, style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.height(8.dp))
+                        Card(modifier = Modifier.fillMaxWidth()) {
+                            Column {
+                                accounts.forEachIndexed { i, acc ->
+                                    val isActive = acc.id == viewModel.loggedUserId.value
+                                    if (i > 0) HorizontalDivider(Modifier.padding(horizontal = 16.dp))
+                                    Row(
+                                        Modifier
+                                            .fillMaxWidth()
+                                            .then(if (!isActive) Modifier.clickable {
+                                                viewModel.switchAccountIfPossible(acc) {
+                                                    switchTarget = acc; switchPass = ""; switchErr = false
+                                                }
+                                            } else Modifier)
+                                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            if (isActive) Icons.Default.AccountCircle else Icons.Default.SwitchAccount,
+                                            null, modifier = Modifier.size(24.dp),
+                                            tint = if (isActive) MaterialTheme.colorScheme.primary
+                                                   else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Spacer(Modifier.width(12.dp))
+                                        Column(Modifier.weight(1f)) {
+                                            Text(acc.username, style = MaterialTheme.typography.titleSmall)
+                                            if (isActive) Text("Sesión activa",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.primary)
+                                        }
+                                        if (isActive) Icon(Icons.Default.CheckCircle, null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(20.dp))
+                                        else Icon(Icons.Default.ChevronRight, null,
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(20.dp))
+                                    }
+                                }
                             }
                         }
                     }
+
                     Spacer(Modifier.height(24.dp))
+
+                    // ── Añadir cuenta ──────────────────────────
+                    OutlinedButton(
+                        onClick  = onAddAccount,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.PersonAdd, null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Añadir cuenta")
+                    }
+
+                    Spacer(Modifier.height(24.dp))
+
+                    // ── Seguridad ─────────────────────────────
+                    Text("Seguridad", style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(onClick = { showPassSheet = true }, modifier = Modifier.fillMaxWidth()) {
+                        Icon(Icons.Default.Lock, null); Spacer(Modifier.width(8.dp)); Text("Cambiar contraseña")
+                    }
+
+                    Spacer(Modifier.height(24.dp))
+
+                    // ── Soporte ───────────────────────────────
                     Text("Soporte", style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.height(8.dp))
@@ -1061,24 +1941,14 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit, onLogout: () ->
                             }
                         },
                         modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Default.Email, null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Enviar Feedback")
-                    }
+                    ) { Icon(Icons.Default.Email, null); Spacer(Modifier.width(8.dp)); Text("Enviar Feedback") }
                     Spacer(Modifier.height(12.dp))
                     OutlinedButton(
-                        onClick = onLogout,
-                        modifier = Modifier.fillMaxWidth(),
+                        onClick = onLogout, modifier = Modifier.fillMaxWidth(),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                    ) {
-                        Icon(Icons.AutoMirrored.Filled.ExitToApp, null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Cerrar Sesión")
-                    }
+                    ) { Icon(Icons.AutoMirrored.Filled.ExitToApp, null); Spacer(Modifier.width(8.dp)); Text("Cerrar Sesión") }
                     Spacer(Modifier.height(32.dp))
-                    Text("v$version",
-                        style = MaterialTheme.typography.labelSmall,
+                    Text("v$version", style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.align(Alignment.CenterHorizontally))
                 }

@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -179,6 +180,28 @@ fun ChatScreen(
     var isRecording    by remember { mutableStateOf(false) }
     var recordFile     by remember { mutableStateOf<File?>(null) }
     var mediaRecorder  by remember { mutableStateOf<MediaRecorder?>(null) }
+    var showStickerPicker by remember { mutableStateOf(false) }
+
+    // Si llegamos desde una notificación sin info del usuario, cargarla
+    var resolvedUsername  by remember { mutableStateOf(otherUsername) }
+    var resolvedPhoto     by remember { mutableStateOf(otherProfilePhoto) }
+    var resolvedOtherUid  by remember { mutableStateOf(otherUserId) }
+
+    LaunchedEffect(conversationId) {
+        if (otherUserId == 0) {
+            try {
+                val r = NewsickRetrofit.api.getChats()
+                if (r.isSuccessful) {
+                    val conv = r.body()?.find { it.id == conversationId }
+                    if (conv != null) {
+                        resolvedUsername = conv.otherUsername
+                        resolvedPhoto    = conv.otherProfilePhoto
+                        resolvedOtherUid = conv.otherUserId
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+    }
 
     // Cargar mensajes
     fun loadMessages() {
@@ -196,6 +219,13 @@ fun ChatScreen(
     }
 
     LaunchedEffect(conversationId) { loadMessages() }
+
+    // Al entrar al chat: cancelar la notificación del sistema y borrar las notifs del servidor
+    LaunchedEffect(conversationId) {
+        NotificationHelper.cancelChat(context, conversationId)
+        // Recargar notificaciones del ViewModel para que desaparezca el badge
+        viewModel.loadNotificationsData()
+    }
 
     // Auto-refresh cada 5 segundos
     LaunchedEffect(conversationId) {
@@ -300,15 +330,28 @@ fun ChatScreen(
         AiConfigDialog(context = context, onDismiss = { showAiConfig = false })
     }
 
+    // Panel de stickers
+    if (showStickerPicker) {
+        StickerPickerSheet(
+            viewModel  = viewModel,
+            context    = context,
+            onSend     = { url ->
+                sendMessage(url, "sticker", replyTo?.id)
+                showStickerPicker = false
+            },
+            onDismiss  = { showStickerPicker = false }
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.clickable { onUserClick(otherUserId) }
+                        modifier = Modifier.clickable { onUserClick(resolvedOtherUid) }
                     ) {
-                        val photoUrl = NewsickRetrofit.absoluteUrl(otherProfilePhoto)
+                        val photoUrl = NewsickRetrofit.absoluteUrl(resolvedPhoto)
                         if (photoUrl.isNotBlank()) {
                             AsyncImage(
                                 model = photoUrl, contentDescription = null,
@@ -321,7 +364,7 @@ fun ChatScreen(
                                 tint = MaterialTheme.colorScheme.primary)
                         }
                         Spacer(Modifier.width(10.dp))
-                        Text(otherUsername, style = MaterialTheme.typography.titleMedium)
+                        Text(resolvedUsername, style = MaterialTheme.typography.titleMedium)
                     }
                 },
                 navigationIcon = {
@@ -329,39 +372,7 @@ fun ChatScreen(
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "Atrás")
                     }
                 },
-                actions = {
-                    // Menú eliminar chat
-                    var showDeleteConfirm by remember { mutableStateOf(false) }
-                    IconButton(onClick = { showDeleteConfirm = true }) {
-                        Icon(Icons.Default.DeleteForever, "Eliminar chat",
-                            tint = MaterialTheme.colorScheme.error)
-                    }
-                    if (showDeleteConfirm) {
-                        AlertDialog(
-                            onDismissRequest = { showDeleteConfirm = false },
-                            title = { Text("Eliminar chat") },
-                            text  = { Text("Se eliminará el chat con $otherUsername. ¿Continuar?") },
-                            confirmButton = {
-                                Button(
-                                    onClick = {
-                                        scope.launch {
-                                            try {
-                                                NewsickRetrofit.api.deleteChat(conversationId)
-                                            } catch (_: Exception) {}
-                                            showDeleteConfirm = false
-                                            onBack()
-                                        }
-                                    },
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = MaterialTheme.colorScheme.error)
-                                ) { Text("Eliminar") }
-                            },
-                            dismissButton = {
-                                TextButton(onClick = { showDeleteConfirm = false }) { Text("Cancelar") }
-                            }
-                        )
-                    }
-                }
+                actions = { }
             )
         },
         bottomBar = {
@@ -404,7 +415,12 @@ fun ChatScreen(
                         .padding(horizontal = 8.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Adjuntar archivo
+                    // Stickers
+                IconButton(onClick = { showStickerPicker = true }) {
+                    Icon(Icons.Default.EmojiEmotions, "Stickers",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                // Adjuntar archivo
                     IconButton(onClick = { mediaLauncher.launch("*/*") }) {
                         Icon(Icons.Default.AttachFile, "Adjuntar",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -582,6 +598,11 @@ private fun MessageBubble(
                     }
                     // Contenido según tipo
                     when (msg.messageType) {
+                        "sticker" -> StickerMessage(
+                            url     = NewsickRetrofit.absoluteUrl(msg.content),
+                            stickerId = msg.content.substringAfterLast("/sticker_")
+                                          .substringBefore(".").toIntOrNull()
+                        )
                         "image" -> AsyncImage(
                             model = NewsickRetrofit.absoluteUrl(msg.content),
                             contentDescription = null,
@@ -794,7 +815,7 @@ fun AiConfigDialog(context: Context, onDismiss: () -> Unit) {
 // HELPER: subir archivo al servidor
 // ══════════════════════════════════════════════════════════
 
-private suspend fun uploadMediaFile(context: Context, uri: Uri): String? =
+private suspend fun uploadMediaFile(context: android.content.Context, uri: Uri): String? =
     withContext(Dispatchers.IO) {
         try {
             val stream = context.contentResolver.openInputStream(uri) ?: return@withContext null
@@ -811,3 +832,191 @@ private suspend fun uploadMediaFile(context: Context, uri: Uri): String? =
             if (r.isSuccessful) r.body()?.url else null
         } catch (_: Exception) { null }
     }
+
+// ══════════════════════════════════════════════════════════
+// STICKER: burbuja de sticker con info del creador al pulsar
+// ══════════════════════════════════════════════════════════
+
+@Composable
+private fun StickerMessage(url: String, stickerId: Int?) {
+    val scope         = rememberCoroutineScope()
+    var creatorInfo   by remember { mutableStateOf<StickerDto?>(null) }
+    var showCreator   by remember { mutableStateOf(false) }
+
+    Box(
+        Modifier
+            .size(120.dp)
+            .clickable {
+                if (stickerId != null && creatorInfo == null) {
+                    scope.launch {
+                        try {
+                            val r = NewsickRetrofit.api.getStickerInfo(stickerId)
+                            if (r.isSuccessful) creatorInfo = r.body()
+                        } catch (_: Exception) {}
+                    }
+                }
+                showCreator = true
+            }
+    ) {
+        AsyncImage(
+            model = url, contentDescription = "Sticker",
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Fit
+        )
+    }
+
+    if (showCreator) {
+        AlertDialog(
+            onDismissRequest = { showCreator = false },
+            title = { Text("Sticker") },
+            text = {
+                creatorInfo?.let { info ->
+                    Column(horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.fillMaxWidth()) {
+                        AsyncImage(
+                            model = NewsickRetrofit.absoluteUrl(url),
+                            contentDescription = null,
+                            modifier = Modifier.size(100.dp),
+                            contentScale = ContentScale.Fit
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            val photo = NewsickRetrofit.absoluteUrl(info.creatorPhoto)
+                            if (photo.isNotBlank()) {
+                                AsyncImage(model = photo, contentDescription = null,
+                                    modifier = Modifier.size(32.dp).clip(CircleShape),
+                                    contentScale = ContentScale.Crop)
+                            } else {
+                                Icon(Icons.Default.AccountCircle, null,
+                                    modifier = Modifier.size(32.dp),
+                                    tint = MaterialTheme.colorScheme.primary)
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            Text("Creado por @${info.creatorUsername}",
+                                style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                } ?: CircularProgressIndicator(Modifier.size(24.dp))
+            },
+            confirmButton = {
+                if (creatorInfo != null) {
+                    Button(onClick = {
+                        scope.launch {
+                            creatorInfo?.let { info ->
+                                try { NewsickRetrofit.api.favoriteSticker(info.id) } catch (_: Exception) {}
+                            }
+                        }
+                        showCreator = false
+                    }) { Text("Guardar en mis stickers") }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCreator = false }) { Text("Cerrar") }
+            }
+        )
+    }
+}
+
+// ══════════════════════════════════════════════════════════
+// PANEL SELECTOR DE STICKERS
+// ══════════════════════════════════════════════════════════
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun StickerPickerSheet(
+    viewModel: MainViewModel,
+    context: android.content.Context,
+    onSend: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val scope       = rememberCoroutineScope()
+    var myStickers  by remember { mutableStateOf<List<StickerDto>>(emptyList()) }
+    var favStickers by remember { mutableStateOf<List<StickerDto>>(emptyList()) }
+    var selectedTab by remember { mutableIntStateOf(0) }
+    var isUploading by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        try {
+            val r1 = NewsickRetrofit.api.getMyStickers()
+            if (r1.isSuccessful) myStickers = r1.body() ?: emptyList()
+            val r2 = NewsickRetrofit.api.getFavoriteStickers()
+            if (r2.isSuccessful) favStickers = r2.body() ?: emptyList()
+        } catch (_: Exception) {}
+    }
+
+    val mediaPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        scope.launch {
+            isUploading = true
+            val url = uploadMediaFile(context, uri)
+            if (url != null) {
+                try {
+                    val r = NewsickRetrofit.api.createSticker(CreateStickerRequest(url))
+                    if (r.isSuccessful) {
+                        val newSticker = r.body()!!
+                        myStickers = listOf(newSticker) + myStickers
+                    }
+                } catch (_: Exception) {}
+            }
+            isUploading = false
+        }
+    }
+
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Stickers", style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f))
+                if (isUploading) {
+                    CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                }
+                IconButton(onClick = { mediaPicker.launch("image/*") }, enabled = !isUploading) {
+                    Icon(Icons.Default.AddPhotoAlternate, "Crear sticker",
+                        tint = MaterialTheme.colorScheme.primary)
+                }
+            }
+            TabRow(selectedTabIndex = selectedTab) {
+                Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 },
+                    text = { Text("Mis stickers") })
+                Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 },
+                    text = { Text("Favoritos") })
+            }
+            val list = if (selectedTab == 0) myStickers else favStickers
+            if (list.isEmpty()) {
+                Box(Modifier.fillMaxWidth().height(120.dp), Alignment.Center) {
+                    Text(
+                        if (selectedTab == 0) "Pulsa + para crear tu primer sticker"
+                        else "Aún no tienes stickers favoritos",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            } else {
+                androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
+                    columns = androidx.compose.foundation.lazy.grid.GridCells.Fixed(4),
+                    modifier = Modifier.fillMaxWidth().height(260.dp).padding(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    items(list.size) { i ->
+                        val sticker = list[i]
+                        val stickerUrl = NewsickRetrofit.absoluteUrl(sticker.url)
+                        AsyncImage(
+                            model = stickerUrl,
+                            contentDescription = null,
+                            modifier = Modifier
+                                .aspectRatio(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { onSend(sticker.url) },
+                            contentScale = ContentScale.Fit
+                        )
+                    }
+                }
+            }
+        }
+    }
+}

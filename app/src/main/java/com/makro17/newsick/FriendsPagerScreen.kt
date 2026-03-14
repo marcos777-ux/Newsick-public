@@ -88,8 +88,12 @@ private fun MessagesTab(
     onChatClick: (Int, String, String, Int) -> Unit
 ) {
     val scope = rememberCoroutineScope()
-    var conversations by remember { mutableStateOf<List<ConversationResponse>>(emptyList()) }
-    var isLoading     by remember { mutableStateOf(true) }
+    var conversations  by remember { mutableStateOf<List<ConversationResponse>>(emptyList()) }
+    var isLoading      by remember { mutableStateOf(true) }
+    var showSearch     by remember { mutableStateOf(false) }
+    var searchQuery    by remember { mutableStateOf("") }
+    var searchResults  by remember { mutableStateOf<List<UserResponse>>(emptyList()) }
+    var isSearching    by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         try {
@@ -99,45 +103,133 @@ private fun MessagesTab(
         isLoading = false
     }
 
+    // Diálogo buscar usuario para nuevo chat
+    if (showSearch) {
+        AlertDialog(
+            onDismissRequest = { showSearch = false; searchQuery = ""; searchResults = emptyList() },
+            title = { Text("Nuevo chat") },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { q ->
+                            searchQuery = q
+                            if (q.length >= 2) {
+                                isSearching = true
+                                scope.launch {
+                                    try {
+                                        val r = NewsickRetrofit.api.searchUsers(SearchUsersRequest(q))
+                                        if (r.isSuccessful) searchResults = (r.body() ?: emptyList())
+                                            .filter { it.id != viewModel.loggedUserId.value }
+                                    } catch (_: Exception) {}
+                                    isSearching = false
+                                }
+                            } else searchResults = emptyList()
+                        },
+                        placeholder = { Text("Buscar usuario…") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        leadingIcon = { Icon(Icons.Default.PersonSearch, null) }
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    if (isSearching) {
+                        Box(Modifier.fillMaxWidth().height(48.dp), Alignment.Center) {
+                            CircularProgressIndicator(Modifier.size(24.dp))
+                        }
+                    } else {
+                        searchResults.forEach { user ->
+                            Row(
+                                Modifier.fillMaxWidth()
+                                    .clickable {
+                                        scope.launch {
+                                            try {
+                                                val r = NewsickRetrofit.api.getOrCreateChat(user.id)
+                                                if (r.isSuccessful) {
+                                                    val convId = r.body()!!.conversationId
+                                                    showSearch = false
+                                                    onChatClick(convId, user.username, user.profilePhoto ?: "", user.id)
+                                                }
+                                            } catch (_: Exception) {}
+                                        }
+                                    }
+                                    .padding(vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                val photoUrl = NewsickRetrofit.absoluteUrl(user.profilePhoto ?: "")
+                                if (photoUrl.isNotBlank()) {
+                                    AsyncImage(model = photoUrl, contentDescription = null,
+                                        modifier = Modifier.size(36.dp).clip(CircleShape),
+                                        contentScale = ContentScale.Crop)
+                                } else {
+                                    Icon(Icons.Default.AccountCircle, null,
+                                        modifier = Modifier.size(36.dp),
+                                        tint = MaterialTheme.colorScheme.primary)
+                                }
+                                Spacer(Modifier.width(10.dp))
+                                Text(user.username, style = MaterialTheme.typography.bodyMedium)
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showSearch = false; searchQuery = ""; searchResults = emptyList() }) {
+                    Text("Cancelar")
+                }
+            }
+        )
+    }
+
     if (isLoading) {
         Box(Modifier.fillMaxSize(), Alignment.Center) { CircularProgressIndicator() }
         return
     }
 
-    if (conversations.isEmpty()) {
-        Box(Modifier.fillMaxSize(), Alignment.Center) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Icon(Icons.Default.ChatBubbleOutline, null,
-                    modifier = Modifier.size(56.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(12.dp))
-                Text("Sin chats todavía",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text("Visita el perfil de alguien para enviarle un mensaje",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Box(Modifier.fillMaxSize()) {
+        if (conversations.isEmpty()) {
+            Box(Modifier.fillMaxSize(), Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(Icons.Default.ChatBubbleOutline, null,
+                        modifier = Modifier.size(56.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(12.dp))
+                    Text("Sin chats todavía",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Pulsa + para buscar alguien",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        } else {
+            LazyColumn(contentPadding = PaddingValues(vertical = 8.dp)) {
+                items(conversations, key = { it.id }) { conv ->
+                    ConversationItem(
+                        conv    = conv,
+                        onClick = {
+                            onChatClick(conv.id, conv.otherUsername, conv.otherProfilePhoto, conv.otherUserId)
+                        },
+                        onDelete = {
+                            scope.launch {
+                                try {
+                                    NewsickRetrofit.api.deleteChat(conv.id)
+                                    conversations = conversations.filter { it.id != conv.id }
+                                } catch (_: Exception) {}
+                            }
+                        }
+                    )
+                    HorizontalDivider(Modifier.padding(horizontal = 72.dp))
+                }
             }
         }
-        return
-    }
 
-    LazyColumn(contentPadding = PaddingValues(vertical = 8.dp)) {
-        items(conversations, key = { it.id }) { conv ->
-            ConversationItem(
-                conv   = conv,
-                onClick = {
-                    onChatClick(conv.id, conv.otherUsername, conv.otherProfilePhoto, conv.otherUserId)
-                },
-                onDelete = {
-                    scope.launch {
-                        try {
-                            NewsickRetrofit.api.deleteChat(conv.id)
-                            conversations = conversations.filter { it.id != conv.id }
-                        } catch (_: Exception) {}
-                    }
-                }
-            )
-            HorizontalDivider(Modifier.padding(horizontal = 72.dp))
+        // FAB +
+        FloatingActionButton(
+            onClick  = { showSearch = true },
+            modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
+            containerColor = MaterialTheme.colorScheme.primary
+        ) {
+            Icon(Icons.Default.Add, "Nuevo chat", tint = MaterialTheme.colorScheme.onPrimary)
         }
     }
 }

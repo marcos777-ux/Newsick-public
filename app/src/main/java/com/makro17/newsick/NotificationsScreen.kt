@@ -1,9 +1,7 @@
 // Copyright (c) 2026 Marcos Quintero Hernández. Todos los derechos reservados.
-// Newsick es software propietario. Queda prohibida su copia, modificación,
-// distribución o ingeniería inversa sin autorización expresa del autor.
-
 package com.makro17.newsick
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -22,20 +20,21 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 
 // ══════════════════════════════════════════════════════════
-// PANTALLA DE SOLICITUDES Y NOTIFICACIONES
+// PANTALLA DE ACTIVIDAD
 // ══════════════════════════════════════════════════════════
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NotificationsScreen(
     viewModel: MainViewModel,
     onBack: () -> Unit,
-    onUserClick: (Int) -> Unit
+    onUserClick: (Int) -> Unit,
+    onRequestsClick: () -> Unit,
+    onChatClick: (conversationId: Int) -> Unit = {}
 ) {
-    val pendingRequests by viewModel.pendingRequests
-    val notifications   by viewModel.notifications
-    var selectedTab     by remember { mutableStateOf(0) }
+    val notifications by viewModel.notifications
+    val pendingCount  = viewModel.pendingRequests.value.size
 
-    // Refrescar al abrir la pantalla
     LaunchedEffect(Unit) { viewModel.loadNotificationsData() }
 
     Scaffold(
@@ -49,97 +48,145 @@ fun NotificationsScreen(
                 }
                 Text("Actividad", style = MaterialTheme.typography.titleLarge)
                 Spacer(Modifier.weight(1f))
-                // Botón refrescar
                 IconButton(onClick = { viewModel.loadNotificationsData() }) {
                     Icon(Icons.Default.Refresh, "Actualizar")
                 }
             }
         }
     ) { padding ->
-        Column(modifier = Modifier.padding(padding).fillMaxSize()) {
-
-            // Pestañas
-            TabRow(selectedTabIndex = selectedTab) {
-                Tab(
-                    selected = selectedTab == 0,
-                    onClick = { selectedTab = 0 },
-                    text = {
-                        BadgedBox(
-                            badge = {
-                                if (pendingRequests.isNotEmpty()) {
-                                    Badge { Text(pendingRequests.size.toString()) }
-                                }
-                            }
-                        ) { Text("Solicitudes") }
+        LazyColumn(
+            modifier = Modifier.padding(padding).fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            // ── Botón solicitudes con contador a la izquierda ──
+            item {
+                FilledTonalButton(
+                    onClick = onRequestsClick,
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                ) {
+                    if (pendingCount > 0) {
+                        Surface(
+                            shape = RoundedCornerShape(50),
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(end = 8.dp)
+                        ) {
+                            Text(
+                                "$pendingCount",
+                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                                color = MaterialTheme.colorScheme.onError,
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
                     }
-                )
-                Tab(
-                    selected = selectedTab == 1,
-                    onClick = { selectedTab = 1 },
-                    text = {
-                        val unread = notifications.count { !it.isRead }
-                        BadgedBox(
-                            badge = {
-                                if (unread > 0) Badge { Text(unread.toString()) }
-                            }
-                        ) { Text("Notificaciones") }
-                    }
-                )
+                    Icon(Icons.Default.PeopleAlt, null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Solicitudes")
+                }
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
             }
 
-            when (selectedTab) {
-                0 -> FriendRequestsTab(
-                    requests = pendingRequests,
-                    onAccept = { req -> viewModel.respondToFriendRequest(req.id, true) },
-                    onReject = { req -> viewModel.respondToFriendRequest(req.id, false) },
-                    onUserClick = onUserClick
-                )
-                1 -> NotificationsTab(
-                    notifications = notifications,
-                    onMarkRead = { notif -> viewModel.markNotificationRead(notif.id) }
-                )
+            // ── Notificaciones ──────────────────────────────
+            if (notifications.isEmpty()) {
+                item {
+                    Box(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(Icons.Default.NotificationsNone, null,
+                                modifier = Modifier.size(56.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.height(8.dp))
+                            Text("Sin notificaciones",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+            } else {
+                items(notifications, key = { it.id }) { notif ->
+                    NotificationItem(
+                        notification = notif,
+                        onMarkRead   = { viewModel.markNotificationRead(notif.id) },
+                        onClick      = {
+                            if (notif.type == "message" && notif.referenceId != null) {
+                                viewModel.markNotificationRead(notif.id)
+                                onChatClick(notif.referenceId)
+                            } else {
+                                viewModel.markNotificationRead(notif.id)
+                            }
+                        }
+                    )
+                }
             }
         }
     }
 }
 
-// ── Pestaña: solicitudes de amistad ───────────────────────
+// ══════════════════════════════════════════════════════════
+// PANTALLA DE SOLICITUDES DE AMISTAD
+// ══════════════════════════════════════════════════════════
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun FriendRequestsTab(
-    requests: List<FriendRequestResponse>,
-    onAccept: (FriendRequestResponse) -> Unit,
-    onReject: (FriendRequestResponse) -> Unit,
+fun FriendRequestsScreen(
+    viewModel: MainViewModel,
+    onBack: () -> Unit,
     onUserClick: (Int) -> Unit
 ) {
-    if (requests.isEmpty()) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Icon(Icons.Default.PeopleAlt, null, modifier = Modifier.size(56.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(8.dp))
-                Text("No tienes solicitudes pendientes", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-        return
-    }
+    val pendingRequests by viewModel.pendingRequests
 
-    LazyColumn(
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        items(requests, key = { it.id }) { req ->
-            FriendRequestItem(
-                request = req,
-                onAccept = { onAccept(req) },
-                onReject = { onReject(req) },
-                onUserClick = { onUserClick(req.senderId) }
+    LaunchedEffect(Unit) { viewModel.loadNotificationsData() }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Solicitudes de amistad") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Atrás")
+                    }
+                }
             )
+        }
+    ) { padding ->
+        if (pendingRequests.isEmpty()) {
+            Box(
+                modifier = Modifier.fillMaxSize().padding(padding),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(Icons.Default.PeopleAlt, null,
+                        modifier = Modifier.size(56.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(8.dp))
+                    Text("No tienes solicitudes pendientes",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.padding(padding).fillMaxSize(),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                items(pendingRequests, key = { it.id }) { req ->
+                    FriendRequestItem(
+                        request     = req,
+                        onAccept    = { viewModel.respondToFriendRequest(req.id, true) },
+                        onReject    = { viewModel.respondToFriendRequest(req.id, false) },
+                        onUserClick = { onUserClick(req.senderId) }
+                    )
+                }
+            }
         }
     }
 }
 
+// ── Tarjeta de solicitud de amistad ───────────────────────
+
 @Composable
-private fun FriendRequestItem(
+fun FriendRequestItem(
     request: FriendRequestResponse,
     onAccept: () -> Unit,
     onReject: () -> Unit,
@@ -150,108 +197,60 @@ private fun FriendRequestItem(
             modifier = Modifier.padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Avatar
             if (request.senderProfilePhoto.isNotBlank()) {
                 AsyncImage(
-                    model = request.senderProfilePhoto,
-                    contentDescription = null,
-                    modifier = Modifier.size(48.dp).clip(CircleShape),
+                    model = request.senderProfilePhoto, contentDescription = null,
+                    modifier = Modifier.size(48.dp).clip(CircleShape).clickable { onUserClick() },
                     contentScale = ContentScale.Crop
                 )
             } else {
-                Icon(
-                    Icons.Default.AccountCircle, null,
-                    modifier = Modifier.size(48.dp),
-                    tint = MaterialTheme.colorScheme.primary
-                )
+                Icon(Icons.Default.AccountCircle, null,
+                    modifier = Modifier.size(48.dp).clickable { onUserClick() },
+                    tint = MaterialTheme.colorScheme.primary)
             }
             Spacer(Modifier.width(12.dp))
-
-            // Info
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    request.senderUsername,
+                Text(request.senderUsername,
                     style = MaterialTheme.typography.titleSmall,
-                    modifier = Modifier.let { mod ->
-                        mod // Could make clickable here too
-                    }
-                )
-                Text(
-                    "Quiere ser tu amigo/a",
+                    modifier = Modifier.clickable { onUserClick() })
+                Text("Quiere ser tu amigo/a",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-
-            // Botones
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Button(
                     onClick = onAccept,
                     modifier = Modifier.height(32.dp),
                     contentPadding = PaddingValues(horizontal = 12.dp)
-                ) {
-                    Text("Aceptar", style = MaterialTheme.typography.labelSmall)
-                }
+                ) { Text("Aceptar", style = MaterialTheme.typography.labelSmall) }
                 OutlinedButton(
                     onClick = onReject,
                     modifier = Modifier.height(32.dp),
                     contentPadding = PaddingValues(horizontal = 12.dp),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                ) {
-                    Text("Rechazar", style = MaterialTheme.typography.labelSmall)
-                }
+                ) { Text("Rechazar", style = MaterialTheme.typography.labelSmall) }
             }
         }
     }
 }
 
-// ── Pestaña: notificaciones generales ─────────────────────
-
-@Composable
-private fun NotificationsTab(
-    notifications: List<NotificationResponse>,
-    onMarkRead: (NotificationResponse) -> Unit
-) {
-    if (notifications.isEmpty()) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Icon(Icons.Default.NotificationsNone, null, modifier = Modifier.size(56.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(8.dp))
-                Text("Sin notificaciones", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-        return
-    }
-
-    LazyColumn(
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        items(notifications, key = { it.id }) { notif ->
-            NotificationItem(notification = notif, onMarkRead = { onMarkRead(notif) })
-        }
-    }
-}
+// ── Tarjeta de notificación ───────────────────────────────
 
 @Composable
 private fun NotificationItem(
     notification: NotificationResponse,
-    onMarkRead: () -> Unit
+    onMarkRead: () -> Unit,
+    onClick: () -> Unit = {}
 ) {
     val containerColor = if (!notification.isRead)
         MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
-    else
-        MaterialTheme.colorScheme.surface
+    else MaterialTheme.colorScheme.surface
 
     Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = containerColor)
+        modifier = Modifier.fillMaxWidth().clickable { onClick() },
+        colors   = CardDefaults.cardColors(containerColor = containerColor)
     ) {
-        Row(
-            modifier = Modifier.padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // Icono según tipo
+        Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             val icon = when (notification.type) {
                 "friend_request"  -> Icons.Default.PersonAdd
                 "friend_accepted" -> Icons.Default.PeopleAlt
@@ -266,23 +265,17 @@ private fun NotificationItem(
             }
             Icon(icon, null, modifier = Modifier.size(36.dp), tint = iconTint)
             Spacer(Modifier.width(12.dp))
-
             Column(modifier = Modifier.weight(1f)) {
                 Text(notification.title, style = MaterialTheme.typography.titleSmall)
-                Text(
-                    notification.message,
+                Text(notification.message,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-
             if (!notification.isRead) {
                 IconButton(onClick = onMarkRead, modifier = Modifier.size(32.dp)) {
-                    Icon(
-                        Icons.Default.CheckCircleOutline, "Marcar como leída",
+                    Icon(Icons.Default.CheckCircleOutline, "Marcar como leída",
                         modifier = Modifier.size(20.dp),
-                        tint = MaterialTheme.colorScheme.primary
-                    )
+                        tint = MaterialTheme.colorScheme.primary)
                 }
             }
         }

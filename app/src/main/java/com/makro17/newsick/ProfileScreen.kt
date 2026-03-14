@@ -74,6 +74,7 @@ fun ProfileScreen(
 ) {
     var showEditDialog   by remember { mutableStateOf(false) }
     var showFriendsSheet by remember { mutableStateOf(false) }
+    var showSessionSheet by remember { mutableStateOf(false) }
     val mySongs          by viewModel.mySongs.collectAsState()
     val friendCount      by viewModel.friendCount
     val friendsList      by viewModel.friendsList
@@ -211,22 +212,72 @@ fun ProfileScreen(
         )
     }
 
+    // ── Bottom sheet: cambiar de sesión desde perfil ──────
+    if (showSessionSheet) {
+        val sessions = remember { viewModel.getAllSavedSessions() }
+        androidx.compose.material3.ModalBottomSheet(
+            onDismissRequest = { showSessionSheet = false }
+        ) {
+            Column(Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+                Text("Cuentas", style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp))
+                HorizontalDivider()
+                sessions.forEach { acc ->
+                    val isActive = acc.id == viewModel.loggedUserId.value
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .then(if (!isActive) Modifier.clickable {
+                                viewModel.switchAccountIfPossible(acc) {
+                                    // necesita contraseña — no aplica aquí porque si está en
+                                    // getAllSavedSessions() ya tiene token guardado
+                                }
+                                showSessionSheet = false
+                            } else Modifier)
+                            .padding(horizontal = 20.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val photoUrl = NewsickRetrofit.absoluteUrl(acc.profilePhoto ?: "")
+                        if (photoUrl.isNotBlank()) {
+                            AsyncImage(model = photoUrl, contentDescription = null,
+                                modifier = Modifier.size(40.dp).clip(CircleShape),
+                                contentScale = ContentScale.Crop)
+                        } else {
+                            Icon(Icons.Default.AccountCircle, null,
+                                modifier = Modifier.size(40.dp),
+                                tint = if (isActive) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Spacer(Modifier.width(14.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(acc.username, style = MaterialTheme.typography.titleSmall)
+                            Text(acc.email, style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        if (isActive) Icon(Icons.Default.CheckCircle, null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp))
+                        else Icon(Icons.Default.ChevronRight, null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp))
+                    }
+                }
+            }
+        }
+    }
+
     Scaffold(
         topBar = {
             Row(
-                modifier = Modifier.fillMaxWidth().padding(16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Perfil", style = MaterialTheme.typography.headlineMedium)
-                Row {
-                    // Botón amigos
-                    IconButton(onClick = onFriendsClick) {
-                        Icon(Icons.Default.Group, "Amigos")
-                    }
-                    IconButton(onClick = onSettingsClick) {
-                        Icon(Icons.Default.Settings, "Configuración")
-                    }
+                IconButton(onClick = onFriendsClick) {
+                    Icon(Icons.Default.Group, "Amigos")
+                }
+                IconButton(onClick = onSettingsClick) {
+                    Icon(Icons.Default.Settings, "Configuración")
                 }
             }
         }
@@ -258,7 +309,16 @@ fun ProfileScreen(
                         }
                         Spacer(Modifier.width(16.dp))
                         Column(modifier = Modifier.weight(1f)) {
-                            Text(username, style = MaterialTheme.typography.titleLarge)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.clickable { showSessionSheet = true }
+                            ) {
+                                Text(username, style = MaterialTheme.typography.titleLarge)
+                                Spacer(Modifier.width(4.dp))
+                                Icon(Icons.Default.KeyboardArrowDown, "Cambiar cuenta",
+                                    modifier = Modifier.size(20.dp),
+                                    tint = MaterialTheme.colorScheme.onSurface)
+                            }
                             Text(
                                 if (bio.isNotBlank()) bio else "Sin descripción",
                                 style = MaterialTheme.typography.bodyMedium,
@@ -620,7 +680,7 @@ fun EditProfileDialog(
                 val serverUrl = uploadProfilePhoto(context, uri)
                 if (serverUrl != null) {
                     profilePhoto = if (serverUrl.startsWith("http")) serverUrl
-                                   else NewsickRetrofit.BASE_URL.trimEnd('/') + serverUrl
+                    else NewsickRetrofit.BASE_URL.trimEnd('/') + serverUrl
                 } else { uploadError = "Error al subir la foto. Inténtalo de nuevo." }
                 isUploading = false
             }
